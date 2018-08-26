@@ -177,5 +177,6 @@ func writeStockprice(srv *sheets.Service, code string, date string, stockprice s
 		log.Fatalf("Unable to write value. %v", err)
 	}
 	v := reflect.ValueOf(resp)
-	log.Println(v.Type()) // 型情報を知りたかった
+	log.Println(v.Type())                           // 型情報 *sheets.AppendValuesResponse
+	log.Println(resp.ServerResponse.HTTPStatusCode) // 200
 }
