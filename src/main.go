@@ -5,7 +5,6 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -79,6 +78,10 @@ func readCode(srv *sheets.Service) [][]interface{} {
 	resp, err := srv.Spreadsheets.Values.Get(spreadsheetId, readRange).Do()
 	if err != nil {
 		log.Fatalf("Unable to retrieve data from sheet: %v", err)
+	}
+	status := resp.ServerResponse.HTTPStatusCode
+	if status != 200 {
+		log.Fatalf("HTTPstatus error. %v", status)
 	}
 	return resp.Values
 }
@@ -176,7 +179,8 @@ func writeStockprice(srv *sheets.Service, code string, date string, stockprice s
 	if err != nil {
 		log.Fatalf("Unable to write value. %v", err)
 	}
-	v := reflect.ValueOf(resp)
-	log.Println(v.Type())                           // 型情報 *sheets.AppendValuesResponse
-	log.Println(resp.ServerResponse.HTTPStatusCode) // 200
+	status := resp.ServerResponse.HTTPStatusCode
+	if status != 200 {
+		log.Fatalf("HTTPstatus error. %v", status)
+	}
 }
