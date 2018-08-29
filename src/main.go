@@ -54,6 +54,8 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintln(w, code, date, stockprice)
 			// 株価をspreadsheetに書き込み
 			writeStockprice(sheetService, code, date, stockprice)
+
+			time.Sleep(1 * time.Second) // 1秒待つ
 		}
 
 		// spreadsheetから株価を取得する
