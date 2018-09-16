@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"reflect"
 	"regexp"
 	"sort"
@@ -42,7 +43,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	// spreadsheetから銘柄コードを取得
 	codes := readCode(sheetService)
 
-	//	fmt.Fprintln(w, codes)
+	//fmt.Fprintln(w, codes)
 
 	if len(codes) == 0 {
 		fmt.Println("No data found.")
@@ -52,6 +53,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 			// codeごとに株価を取得
 			date, stockprice := doScrape(r, code)
 			fmt.Fprintln(w, code, date, stockprice)
+
 			// 株価をspreadsheetに書き込み
 			writeStockprice(sheetService, code, date, stockprice)
 
@@ -107,9 +109,17 @@ func getClientWithJson(r *http.Request) *http.Client {
 
 func readCode(srv *sheets.Service) [][]interface{} {
 	// 'code' worksheet を読み取り
-	spreadsheetId := "1ExUKJy5SfKb62wycg1jOiHHeQ1t3hGyE2Vau5RkKzfk"
+
+	sheetId := ""
+	// sheetIdを環境変数から読み込む
+	if v := os.Getenv("CODE_SHEETID"); v != "" {
+		sheetId = v
+	} else {
+		log.Fatalf("Failed to get 'codes' sheetId. '%v'", v)
+		os.Exit(0)
+	}
 	readRange := "code"
-	resp, err := srv.Spreadsheets.Values.Get(spreadsheetId, readRange).Do()
+	resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
 	if err != nil {
 		log.Fatalf("Unable to retrieve data from sheet: %v", err)
 	}
@@ -123,8 +133,18 @@ func readCode(srv *sheets.Service) [][]interface{} {
 func doScrape(r *http.Request, code string) (string, string) {
 	ctx := appengine.NewContext(r)
 	client := urlfetch.Client(ctx)
+
+	base_url := ""
+	// リクエスト対象のURLを環境変数から読み込む
+	if v := os.Getenv("URL"); v != "" {
+		base_url = v
+	} else {
+		log.Fatalf("Failed to get base_url. '%v'", v)
+		os.Exit(0)
+	}
+
 	// Request the HTML page.
-	url := "https://www.nikkei.com/smartchart/?code=" + code
+	url := base_url + code
 	//res, err := http.Get(url)
 	res, err := client.Get(url)
 	if err != nil {
@@ -132,7 +152,7 @@ func doScrape(r *http.Request, code string) (string, string) {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		log.Fatalf("status code error: %d %s", res.StatusCode, res.Status)
+		log.Fatalf("status code error: %d %s %s", res.StatusCode, res.Status, url)
 	}
 
 	// Load the HTML document
@@ -199,8 +219,14 @@ func getFormatedPrice(s string) string {
 }
 
 func writeStockprice(srv *sheets.Service, code string, date string, stockprice string) {
-	// Write stockprice spreadsheet:
-	writespreadsheetId := "1FcwyVrMIZ5xGrFaJvIg0SVpJPsf9Q7WabVxBXRxpUZA"
+	sheetId := ""
+	// sheetIdを環境変数から読み込む
+	if v := os.Getenv("STOCKPRICE_SHEETID"); v != "" {
+		sheetId = v
+	} else {
+		log.Fatalf("Failed to get stockprice sheetId. '%v'", v)
+		os.Exit(0)
+	}
 	writeRange := "stockprice"
 
 	valueRange := &sheets.ValueRange{
@@ -209,7 +235,7 @@ func writeStockprice(srv *sheets.Service, code string, date string, stockprice s
 			[]interface{}{code, date, stockprice},
 		},
 	}
-	resp, err := srv.Spreadsheets.Values.Append(writespreadsheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
+	resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
 	if err != nil {
 		log.Fatalf("Unable to write value. %v", err)
 	}
@@ -279,11 +305,18 @@ func calcIncreaseRate(val [][]interface{}, code string) []float64 {
 }
 
 func clearRate(srv *sheets.Service) {
-	// clear stockprice rate spreadsheet:
-	writespreadsheetId := "1ZQK1SdjLS0ZCrKL_0A2jrbG-nxEcf-h4UIDgXAXCfMM"
+	sheetId := ""
+	// sheetIdを環境変数から読み込む
+	if v := os.Getenv("RATE_SHEETID"); v != "" {
+		sheetId = v
+	} else {
+		log.Fatalf("Failed to get price rate sheetId. '%v'", v)
+		os.Exit(0)
+	}
 	writeRange := "rate"
 
-	resp, err := srv.Spreadsheets.Values.Clear(writespreadsheetId, writeRange, &sheets.ClearValuesRequest{}).Do()
+	// clear stockprice rate spreadsheet:
+	resp, err := srv.Spreadsheets.Values.Clear(sheetId, writeRange, &sheets.ClearValuesRequest{}).Do()
 	if err != nil {
 		log.Fatalf("Unable to clear value. %v", err)
 	}
@@ -294,8 +327,14 @@ func clearRate(srv *sheets.Service) {
 }
 
 func writeRate(srv *sheets.Service, code string, rate []float64) {
-	// Write stockprice rate spreadsheet:
-	writespreadsheetId := "1ZQK1SdjLS0ZCrKL_0A2jrbG-nxEcf-h4UIDgXAXCfMM"
+	sheetId := ""
+	// sheetIdを環境変数から読み込む
+	if v := os.Getenv("RATE_SHEETID"); v != "" {
+		sheetId = v
+	} else {
+		log.Fatalf("Failed to get price rate sheetId. '%v'", v)
+		os.Exit(0)
+	}
 	writeRange := "rate"
 
 	valueRange := &sheets.ValueRange{
@@ -304,7 +343,8 @@ func writeRate(srv *sheets.Service, code string, rate []float64) {
 			[]interface{}{code, rate[0], rate[1], rate[2], rate[3], rate[4], rate[5]},
 		},
 	}
-	resp, err := srv.Spreadsheets.Values.Append(writespreadsheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
+	// Write stockprice rate spreadsheet:
+	resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
 	if err != nil {
 		log.Fatalf("Unable to write value. %v", err)
 	}
