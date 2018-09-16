@@ -40,6 +40,11 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		log.Fatalf("Unable to retrieve Sheets Client %v", err)
 	}
 
+	if !isBussinessday(sheetService) {
+		log.Println("Is not a business day today.")
+		return
+	}
+
 	// spreadsheetから銘柄コードを取得
 	codes := readCode(sheetService)
 
@@ -107,6 +112,65 @@ func getClientWithJson(r *http.Request) *http.Client {
 	return conf.Client(ctx)
 }
 
+func isBussinessday(srv *sheets.Service) bool {
+	if v := os.Getenv("ENV"); v == "test" {
+		// test環境は常にtrue
+		return true
+	} else if v == "prod" {
+
+		// 土日は実行しない
+		jst, _ := time.LoadLocation("Asia/Tokyo")
+		now := time.Now().In(jst)
+
+		d := now.Weekday()
+		switch d {
+		case 6, 0: // Saturday, Sunday
+			return false
+		}
+
+		today_ymd := now.Format("2006/01/02")
+
+		holidays := getHolidays(srv)
+		for _, row := range holidays {
+			holiday := row[0].(string)
+			if holiday == today_ymd {
+				log.Println("Today is holiday.")
+				return false
+			}
+		}
+	} else {
+		// ENVがprodでもtestでもない場合は異常終了
+		log.Fatalf("ENV must be 'test' or 'prod': %v", v)
+		os.Exit(0)
+	}
+	return true
+
+}
+
+func getHolidays(srv *sheets.Service) [][]interface{} {
+	// 'holiday' worksheet を読み取り
+	// 東京証券取引所の休日: https://www.jpx.co.jp/corporate/calendar/index.html
+
+	sheetId := ""
+	// sheetIdを環境変数から読み込む
+	if v := os.Getenv("HOLIDAY_SHEETID"); v != "" {
+		sheetId = v
+	} else {
+		log.Fatalf("Failed to get holiday sheetId. '%v'", v)
+		os.Exit(0)
+	}
+	readRange := "holiday"
+	resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
+	if err != nil {
+		log.Fatalf("Unable to retrieve data from sheet: %v", err)
+	}
+	status := resp.ServerResponse.HTTPStatusCode
+	if status != 200 {
+		log.Fatalf("HTTPstatus error. %v", status)
+	}
+	return resp.Values
+}
+
 func readCode(srv *sheets.Service) [][]interface{} {
 	// 'code' worksheet を読み取り
 
@@ -115,7 +179,7 @@ func readCode(srv *sheets.Service) [][]interface{} {
 	if v := os.Getenv("CODE_SHEETID"); v != "" {
 		sheetId = v
 	} else {
-		log.Fatalf("Failed to get 'codes' sheetId. '%v'", v)
+		log.Fatalf("Failed to get codes sheetId. '%v'", v)
 		os.Exit(0)
 	}
 	readRange := "code"
