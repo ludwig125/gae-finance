@@ -1,0 +1,14 @@
+runtime: go
+api_version: go1
+
+handlers:
+
+# All URLs are handled by the Go application script
+- url: /.*
+  script: _go_app
+
+env_variables:
+  CODE_SHEETID: "1ExUKJy5SfKb62wycg1jOiHHeQ1t3hGyE2Vau5RkKzfk" 
+  URL: "https://www.nikkei.com/smartchart/?code="
+  STOCKPRICE_SHEETID: "1FcwyVrMIZ5xGrFaJvIg0SVpJPsf9Q7WabVxBXRxpUZA"
+  RATE_SHEETID: "1ZQK1SdjLS0ZCrKL_0A2jrbG-nxEcf-h4UIDgXAXCfMM"
