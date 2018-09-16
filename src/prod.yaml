@@ -8,6 +8,8 @@ handlers:
   script: _go_app
 
 env_variables:
+  ENV: "prod"
+  HOLIDAY_SHEETID: "1ExUKJy5SfKb62wycg1jOiHHeQ1t3hGyE2Vau5RkKzfk"
   CODE_SHEETID: "1ExUKJy5SfKb62wycg1jOiHHeQ1t3hGyE2Vau5RkKzfk" 
   URL: "https://www.nikkei.com/smartchart/?code="
   STOCKPRICE_SHEETID: "1FcwyVrMIZ5xGrFaJvIg0SVpJPsf9Q7WabVxBXRxpUZA"
