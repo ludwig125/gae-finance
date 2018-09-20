@@ -10,7 +10,8 @@ handlers:
 env_variables:
   ENV: "test"
   HOLIDAY_SHEETID: "1NG3QAMzXLG6kRBaGSIV5g3utQ5lAsykD98IxTAt0F34"
-  CODE_SHEETID: "1NG3QAMzXLG6kRBaGSIV5g3utQ5lAsykD98IxTAt0F34" 
-  URL: "https://gae-webui.appspot.com/?code="
+  CODE_SHEETID: "1NG3QAMzXLG6kRBaGSIV5g3utQ5lAsykD98IxTAt0F34"
+  DAILY_PRICE_URL: "https://gae-webui.appspot.com/?code="
+  HOURLY_PRICE_URL: "https://gae-webui.appspot.com/?code="
   STOCKPRICE_SHEETID: "1NG3QAMzXLG6kRBaGSIV5g3utQ5lAsykD98IxTAt0F34"
   RATE_SHEETID: "1NG3QAMzXLG6kRBaGSIV5g3utQ5lAsykD98IxTAt0F34"
