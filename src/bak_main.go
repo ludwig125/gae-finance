@@ -21,8 +21,41 @@ import (
 )
 
 func main() {
+	http.HandleFunc("/daily", indexHandlerDaily)
 	http.HandleFunc("/", indexHandler)
 	appengine.Main() // Starts the server to receive requests
+}
+
+// Dailyの株価を取得
+func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
+
+	// googleAPIへのclientをリクエストから作成
+	client := getClientWithJson(r)
+
+	// spreadsheets clientを取得
+	sheetService, err := sheets.New(client)
+	if err != nil {
+		log.Fatalf("Unable to retrieve Sheets Client %v", err)
+	}
+
+	// spreadsheetから銘柄コードを取得
+	codes := readCode(sheetService)
+
+	//fmt.Fprintln(w, codes)
+	if len(codes) == 0 {
+		fmt.Println("No data found.")
+	} else {
+		for _, row := range codes {
+			code := row[0].(string)
+			// codeごとに株価を取得
+			date, stockprice := doScrapeDaily(r, code)
+			fmt.Fprintln(w, code, date, stockprice)
+
+			// 株価をspreadsheetに書き込み
+			//writeStockprice(sheetService, code, date, stockprice)
+			//time.Sleep(1 * time.Second) // 1秒待つ
+		}
+	}
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
@@ -38,11 +71,6 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	sheetService, err := sheets.New(client)
 	if err != nil {
 		log.Fatalf("Unable to retrieve Sheets Client %v", err)
-	}
-
-	if !isBussinessday(sheetService) {
-		log.Println("Is not a business day today.")
-		return
 	}
 
 	// spreadsheetから銘柄コードを取得
@@ -121,65 +149,6 @@ func getClientWithJson(r *http.Request) *http.Client {
 	return conf.Client(ctx)
 }
 
-func isBussinessday(srv *sheets.Service) bool {
-	if v := os.Getenv("ENV"); v == "test" {
-		// test環境は常にtrue
-		return true
-	} else if v == "prod" {
-
-		// 土日は実行しない
-		jst, _ := time.LoadLocation("Asia/Tokyo")
-		now := time.Now().In(jst)
-
-		d := now.Weekday()
-		switch d {
-		case 6, 0: // Saturday, Sunday
-			return false
-		}
-
-		today_ymd := now.Format("2006/01/02")
-
-		holidays := getHolidays(srv)
-		for _, row := range holidays {
-			holiday := row[0].(string)
-			if holiday == today_ymd {
-				log.Println("Today is holiday.")
-				return false
-			}
-		}
-	} else {
-		// ENVがprodでもtestでもない場合は異常終了
-		log.Fatalf("ENV must be 'test' or 'prod': %v", v)
-		os.Exit(0)
-	}
-	return true
-
-}
-
-func getHolidays(srv *sheets.Service) [][]interface{} {
-	// 'holiday' worksheet を読み取り
-	// 東京証券取引所の休日: https://www.jpx.co.jp/corporate/calendar/index.html
-
-	sheetId := ""
-	// sheetIdを環境変数から読み込む
-	if v := os.Getenv("HOLIDAY_SHEETID"); v != "" {
-		sheetId = v
-	} else {
-		log.Fatalf("Failed to get holiday sheetId. '%v'", v)
-		os.Exit(0)
-	}
-	readRange := "holiday"
-	resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
-	if err != nil {
-		log.Fatalf("Unable to retrieve data from sheet: %v", err)
-	}
-	status := resp.ServerResponse.HTTPStatusCode
-	if status != 200 {
-		log.Fatalf("HTTPstatus error. %v", status)
-	}
-	return resp.Values
-}
-
 func readCode(srv *sheets.Service) [][]interface{} {
 	// 'code' worksheet を読み取り
 
@@ -188,7 +157,7 @@ func readCode(srv *sheets.Service) [][]interface{} {
 	if v := os.Getenv("CODE_SHEETID"); v != "" {
 		sheetId = v
 	} else {
-		log.Fatalf("Failed to get codes sheetId. '%v'", v)
+		log.Fatalf("Failed to get 'codes' sheetId. '%v'", v)
 		os.Exit(0)
 	}
 	readRange := "code"
@@ -201,6 +170,48 @@ func readCode(srv *sheets.Service) [][]interface{} {
 		log.Fatalf("HTTPstatus error. %v", status)
 	}
 	return resp.Values
+}
+
+func doScrapeDaily(r *http.Request, code string) (string, string) {
+	ctx := appengine.NewContext(r)
+	client := urlfetch.Client(ctx)
+
+	base_url := ""
+	// リクエスト対象のURLを環境変数から読み込む
+	if v := os.Getenv("DAILY_PRICE_URL"); v != "" {
+		base_url = v
+	} else {
+		log.Fatalf("Failed to get daily base_url. '%v'", v)
+		os.Exit(0)
+	}
+
+	// Request the HTML page.
+	url := base_url + code
+	//res, err := http.Get(url)
+	res, err := client.Get(url)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		log.Fatalf("status code error: %d %s %s", res.StatusCode, res.Status, url)
+	}
+
+	// Load the HTML document
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// time と priceを取得
+	var t, p string
+	doc.Find(".m-tableType01 a-mb12 .m-tableType01_table").Each(func(i int, s *goquery.Selection) {
+		t = s.Find(".a-taC").Text()
+		p = s.Find(".a-taR a-wordBreakAll").Text()
+	})
+	log.Println("test", t, p)
+	// 必要な形に整形して返す
+	return t, p
 }
 
 func doScrape(r *http.Request, code string) (string, string) {
