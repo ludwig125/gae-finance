@@ -86,8 +86,17 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		clearRate(sheetService)
 
 		// 株価の比率順にソートしたものを書き込み
-		for _, r := range whole_code_rate {
-			writeRate(sheetService, r.Code, r.Rate)
+		for i, r := range whole_code_rate {
+			// 100件以上ある場合は最初の50件と最後の50件のみwrite
+			if len(whole_code_rate) >= 100 {
+				if i < 50 || i >= (len(whole_code_rate)-50) {
+					writeRate(sheetService, r.Code, r.Rate)
+					//	time.Sleep(1 * time.Second) // リクエスト制限にひっかかったら1秒待つ
+				}
+			} else {
+				writeRate(sheetService, r.Code, r.Rate)
+				//	time.Sleep(1 * time.Second) // 1秒待つ
+			}
 		}
 	}
 }
@@ -136,7 +145,7 @@ func doScrape(r *http.Request, code string) (string, string) {
 
 	base_url := ""
 	// リクエスト対象のURLを環境変数から読み込む
-	if v := os.Getenv("URL"); v != "" {
+	if v := os.Getenv("HOURLY_PRICE_URL"); v != "" {
 		base_url = v
 	} else {
 		log.Fatalf("Failed to get base_url. '%v'", v)
