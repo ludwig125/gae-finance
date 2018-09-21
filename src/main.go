@@ -21,8 +21,42 @@ import (
 )
 
 func main() {
+	http.HandleFunc("/daily", indexHandlerDaily)
 	http.HandleFunc("/", indexHandler)
 	appengine.Main() // Starts the server to receive requests
+}
+
+// Dailyの株価を取得
+func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
+
+	// googleAPIへのclientをリクエストから作成
+	client := getClientWithJson(r)
+
+	// spreadsheets clientを取得
+	sheetService, err := sheets.New(client)
+	if err != nil {
+		log.Fatalf("Unable to retrieve Sheets Client %v", err)
+	}
+
+	// spreadsheetから銘柄コードを取得
+	codes := readCode(sheetService)
+
+	//fmt.Fprintln(w, codes)
+	if len(codes) == 0 {
+		fmt.Println("No data found.")
+	} else {
+		for _, row := range codes {
+			code := row[0].(string)
+			// codeごとに株価を取得
+			date_price := doScrapeDaily(r, code)
+			for i := len(date_price) - 1; i >= 0; i-- {
+				//fmt.Fprintln(w, code, date_price[i])
+				// 日次の株価をspreadsheetに書き込み
+				writeStockpriceDaily(sheetService, code, date_price[i])
+			}
+			time.Sleep(1 * time.Second) // 1秒待つ
+		}
+	}
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
@@ -203,6 +237,55 @@ func readCode(srv *sheets.Service) [][]interface{} {
 	return resp.Values
 }
 
+func doScrapeDaily(r *http.Request, code string) [][]string {
+	ctx := appengine.NewContext(r)
+	client := urlfetch.Client(ctx)
+
+	base_url := ""
+	// リクエスト対象のURLを環境変数から読み込む
+	if v := os.Getenv("DAILY_PRICE_URL"); v != "" {
+		base_url = v
+	} else {
+		log.Fatalf("Failed to get daily base_url. '%v'", v)
+		os.Exit(0)
+	}
+
+	// Request the HTML page.
+	url := base_url + code
+	//res, err := http.Get(url)
+	res, err := client.Get(url)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		log.Fatalf("status code error: %d %s %s", res.StatusCode, res.Status, url)
+	}
+
+	// Load the HTML document
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// date と priceを取得
+	var date_price [][]string
+	doc.Find(".m-tableType01_table table tbody tr").Each(func(i int, s *goquery.Selection) {
+		date := s.Find(".a-taC").Text()
+		re := regexp.MustCompile(`[0-9]+/[0-9]+`).Copy()
+		date = re.FindString(date)
+
+		var arr []string
+		arr = append(arr, date)
+		s.Find(".a-taR").Each(func(j int, s2 *goquery.Selection) {
+			// ","を取り除く
+			arr = append(arr, strings.Replace(s2.Text(), ",", "", -1))
+		})
+		date_price = append(date_price, arr)
+	})
+	return date_price
+}
+
 func doScrape(r *http.Request, code string) (string, string) {
 	ctx := appengine.NewContext(r)
 	client := urlfetch.Client(ctx)
@@ -291,6 +374,34 @@ func getFormatedPrice(s string) string {
 	return price
 }
 
+func writeStockpriceDaily(srv *sheets.Service, code string, dp []string) {
+	sheetId := ""
+	// sheetIdを環境変数から読み込む
+	if v := os.Getenv("STOCKPRICE_SHEETID"); v != "" {
+		sheetId = v
+	} else {
+		log.Fatalf("Failed to get stockprice sheetId. '%v'", v)
+		os.Exit(0)
+	}
+	writeRange := "daily"
+
+	valueRange := &sheets.ValueRange{
+		MajorDimension: "ROWS",
+		Values: [][]interface{}{
+			// code, 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値
+			[]interface{}{code, dp[0], dp[1], dp[2], dp[3], dp[4], dp[5], dp[6]},
+		},
+	}
+	resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
+	if err != nil {
+		log.Fatalf("Unable to write value. %v", err)
+	}
+	status := resp.ServerResponse.HTTPStatusCode
+	if status != 200 {
+		log.Fatalf("HTTPstatus error. %v", status)
+	}
+}
+
 func writeStockprice(srv *sheets.Service, code string, date string, stockprice string) {
 	sheetId := ""
 	// sheetIdを環境変数から読み込む
@@ -319,10 +430,17 @@ func writeStockprice(srv *sheets.Service, code string, date string, stockprice s
 }
 
 func getLatestPrice(srv *sheets.Service) [][]interface{} {
-	// stockpriceシートからデータを取得
-	spreadsheetId := "1FcwyVrMIZ5xGrFaJvIg0SVpJPsf9Q7WabVxBXRxpUZA"
+	sheetId := ""
+	// sheetIdを環境変数から読み込む
+	if v := os.Getenv("STOCKPRICE_SHEETID"); v != "" {
+		sheetId = v
+	} else {
+		log.Fatalf("Failed to get stockprice sheetId. '%v'", v)
+		os.Exit(0)
+	}
 	readRange := "stockprice"
-	resp, err := srv.Spreadsheets.Values.Get(spreadsheetId, readRange).Do()
+	// stockpriceシートからデータを取得
+	resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
 	if err != nil {
 		log.Fatalf("Unable to retrieve data from sheet: %v", err)
 	}
