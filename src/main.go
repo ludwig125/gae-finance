@@ -59,6 +59,12 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// codeごとの株価比率
+type code_rate struct {
+	Code string
+	Rate []float64
+}
+
 func indexHandler(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.Redirect(w, r, "/", http.StatusFound)
@@ -103,11 +109,11 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		resp := getLatestPrice(sheetService)
 		//fmt.Fprintln(w, resp)
 
-		// codeごとの株価比率
-		type code_rate struct {
-			Code string
-			Rate []float64
-		}
+		//		// codeごとの株価比率
+		//		type code_rate struct {
+		//			Code string
+		//			Rate []float64
+		//		}
 
 		// 全codeの株価比率
 		var whole_code_rate []code_rate
@@ -125,18 +131,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		clearRate(sheetService)
 
 		// 株価の比率順にソートしたものを書き込み
-		for i, r := range whole_code_rate {
-			// 100件以上ある場合は最初の50件と最後の50件のみwrite
-			if len(whole_code_rate) >= 100 {
-				if i < 50 || i >= (len(whole_code_rate)-50) {
-					writeRate(sheetService, r.Code, r.Rate)
-					//	time.Sleep(1 * time.Second) // リクエスト制限にひっかかったら1秒待つ
-				}
-			} else {
-				writeRate(sheetService, r.Code, r.Rate)
-				//	time.Sleep(1 * time.Second) // 1秒待つ
-			}
-		}
+		writeRate(sheetService, whole_code_rate)
 	}
 }
 
@@ -517,7 +512,7 @@ func clearRate(srv *sheets.Service) {
 	}
 }
 
-func writeRate(srv *sheets.Service, code string, rate []float64) {
+func writeRate(srv *sheets.Service, rate []code_rate) {
 	sheetId := ""
 	// sheetIdを環境変数から読み込む
 	if v := os.Getenv("RATE_SHEETID"); v != "" {
@@ -528,11 +523,16 @@ func writeRate(srv *sheets.Service, code string, rate []float64) {
 	}
 	writeRange := "rate"
 
+	// spreadsheetに書き込み対象の行列を作成
+	matrix := make([][]interface{}, len(rate))
+	// 株価の比率順にソートしたものを書き込み
+	for i, r := range rate {
+		matrix[i] = []interface{}{r.Code, r.Rate[0], r.Rate[1], r.Rate[2], r.Rate[3], r.Rate[4], r.Rate[5]}
+	}
+
 	valueRange := &sheets.ValueRange{
 		MajorDimension: "ROWS",
-		Values: [][]interface{}{
-			[]interface{}{code, rate[0], rate[1], rate[2], rate[3], rate[4], rate[5]},
-		},
+		Values:         matrix,
 	}
 	// Write stockprice rate spreadsheet:
 	resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
