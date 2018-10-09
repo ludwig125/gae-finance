@@ -334,15 +334,27 @@ func doScrape(r *http.Request, code string) (string, string) {
 		price = s.Find(".item1").Text()
 	})
 	// 必要な形に整形して返す
-	return getFormatedDate(time), getFormatedPrice(price)
+	return getFormatedDate(time, r), getFormatedPrice(price)
 }
 
-func getFormatedDate(s string) string {
+func getFormatedDate(s string, r *http.Request) string {
+	ctx := appengine.NewContext(r)
+
 	re := regexp.MustCompile(`\d+:\d+`).Copy()
 	t := strings.Split(re.FindString(s), ":") // ["06", "00"]
-	data_hour, _ := strconv.Atoi(t[0])
-	data_hour = data_hour + 9 // GMT -> JST
-	data_min := t[1]
+	hour, err := strconv.Atoi(t[0])
+	if err != nil {
+		log.Errorf(ctx, "Failed to conv hour: %v, err: %v", t[0], err)
+		os.Exit(0)
+	}
+	hour = hour + 9 // GMT -> JST
+
+	var min int
+	min, err = strconv.Atoi(t[1])
+	if err != nil {
+		log.Warningf(ctx, "Failed to conv min: %v, err: %v", t[1], err)
+		min = 0 // 変換できない時は0分にする
+	}
 
 	jst, _ := time.LoadLocation("Asia/Tokyo")
 	now := time.Now().In(jst)
@@ -353,14 +365,14 @@ func getFormatedDate(s string) string {
 	var ymd string
 	switch d {
 	case 1: // Monday
-		if h < data_hour {
+		if h < hour {
 			// 月曜に取得したデータが現在時刻より後であればそれは前の金曜のもの
 			ymd = now.AddDate(0, 0, -3).Format("2006/01/02")
 		} else {
 			ymd = now.Format("2006/01/02")
 		}
 	case 2, 3, 4, 5: // Tuesday,..Friday
-		if h < data_hour {
+		if h < hour {
 			// 火~金曜に取得したデータが現在時刻より後であればそれは前日のもの
 			ymd = now.AddDate(0, 0, -1).Format("2006/01/02")
 		} else {
@@ -373,7 +385,7 @@ func getFormatedDate(s string) string {
 		// 日曜に取得したデータは前の金曜のもの
 		ymd = now.AddDate(0, 0, -2).Format("2006/01/02")
 	}
-	return fmt.Sprintf("%s %2d:%s", ymd, data_hour, data_min)
+	return fmt.Sprintf("%s %02d:%02d", ymd, hour, min)
 }
 
 func getFormatedPrice(s string) string {
