@@ -344,15 +344,15 @@ func getFormatedDate(s string, r *http.Request) string {
 	t := strings.Split(re.FindString(s), ":") // ["06", "00"]
 	hour, err := strconv.Atoi(t[0])
 	if err != nil {
-		log.Errorf(ctx, "Failed to conv hour: %v, err: %v", t[0], err)
-		os.Exit(0)
+		log.Warningf(ctx, "Failed to conv hour. data: '%s', err: %v", s, err)
+		hour = 0 // 変換できない時は0時にする
 	}
 	hour = hour + 9 // GMT -> JST
 
 	var min int
 	min, err = strconv.Atoi(t[1])
 	if err != nil {
-		log.Warningf(ctx, "Failed to conv min: %v, err: %v", t[1], err)
+		log.Warningf(ctx, "Failed to conv min. data: '%s', err: %v", s, err)
 		min = 0 // 変換できない時は0分にする
 	}
 
