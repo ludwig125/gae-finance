@@ -346,11 +346,11 @@ func getFormatedDate(s string, r *http.Request) string {
 	if err != nil {
 		log.Warningf(ctx, "Failed to conv hour. data: '%s', err: %v", s, err)
 		hour = 0 // 変換できない時は0時にする
+		t[1] = "0"
 	}
 	hour = hour + 9 // GMT -> JST
 
-	var min int
-	min, err = strconv.Atoi(t[1])
+	min, err := strconv.Atoi(t[1])
 	if err != nil {
 		log.Warningf(ctx, "Failed to conv min. data: '%s', err: %v", s, err)
 		min = 0 // 変換できない時は0分にする
