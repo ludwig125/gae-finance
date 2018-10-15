@@ -22,9 +22,15 @@ import (
 )
 
 func main() {
+	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", indexHandlerDaily)
 	http.HandleFunc("/", indexHandler)
 	appengine.Main() // Starts the server to receive requests
+}
+
+func start(w http.ResponseWriter, r *http.Request) {
+	c := appengine.NewContext(r)
+	log.Infof(c, "STARTING")
 }
 
 // Dailyの株価を取得
