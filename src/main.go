@@ -33,6 +33,12 @@ func start(w http.ResponseWriter, r *http.Request) {
 	log.Infof(c, "STARTING")
 }
 
+//// codeごとの株価
+//type code_price struct {
+//	Code string
+//	Price []float64
+//}
+
 // Dailyの株価を取得
 func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 
@@ -58,11 +64,11 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 		for _, row := range codes {
 			code := row[0].(string)
 			// codeごとに株価を取得
-			date_price := doScrapeDaily(r, code)
-			for i := len(date_price) - 1; i >= 0; i-- {
-				//fmt.Fprintln(w, code, date_price[i])
+			daily_price := doScrapeDaily(r, code)
+			for i := len(daily_price) - 1; i >= 0; i-- {
+				//fmt.Fprintln(w, code, daily_price[i])
 				// 日次の株価をspreadsheetに書き込み
-				writeStockpriceDaily(sheetService, r, code, date_price[i])
+				writeStockpriceDaily(sheetService, r, code, daily_price[i])
 			}
 			time.Sleep(1 * time.Second) // 1秒待つ
 		}
@@ -119,7 +125,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// spreadsheetから株価を取得する
-		resp := getLatestPrice(sheetService, r)
+		resp := getSheetData(r, sheetService, "STOCKPRICE_SHEETID", "stockprice")
 		//fmt.Fprintln(w, resp)
 
 		//		// codeごとの株価比率
@@ -467,18 +473,18 @@ func writeStockprice(srv *sheets.Service, r *http.Request, code string, date str
 	}
 }
 
-func getLatestPrice(srv *sheets.Service, r *http.Request) [][]interface{} {
+func getSheetData(r *http.Request, srv *sheets.Service, sid string, sname string) [][]interface{} {
 	ctx := appengine.NewContext(r)
 
 	sheetId := ""
 	// sheetIdを環境変数から読み込む
-	if v := os.Getenv("STOCKPRICE_SHEETID"); v != "" {
+	if v := os.Getenv(sid); v != "" {
 		sheetId = v
 	} else {
 		log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
 		os.Exit(0)
 	}
-	readRange := "stockprice"
+	readRange := sname
 	// stockpriceシートからデータを取得
 	resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
 	if err != nil {
