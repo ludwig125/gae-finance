@@ -338,23 +338,7 @@ func doScrape(r *http.Request, code string) (string, string) {
 }
 
 func getFormatedDate(s string, r *http.Request) string {
-	ctx := appengine.NewContext(r)
-
-	re := regexp.MustCompile(`\d+:\d+`).Copy()
-	t := strings.Split(re.FindString(s), ":") // ["06", "00"]
-	hour, err := strconv.Atoi(t[0])
-	if err != nil {
-		log.Warningf(ctx, "Failed to conv hour. data: '%s', err: %v", s, err)
-		hour = 0 // 変換できない時は0時にする
-		t[1] = "0"
-	}
-	hour = hour + 9 // GMT -> JST
-
-	min, err := strconv.Atoi(t[1])
-	if err != nil {
-		log.Warningf(ctx, "Failed to conv min. data: '%s', err: %v", s, err)
-		min = 0 // 変換できない時は0分にする
-	}
+	hour, min := getHourMin(s, r) // スクレイピングの結果から時刻を取得
 
 	jst, _ := time.LoadLocation("Asia/Tokyo")
 	now := time.Now().In(jst)
@@ -386,6 +370,28 @@ func getFormatedDate(s string, r *http.Request) string {
 		ymd = now.AddDate(0, 0, -2).Format("2006/01/02")
 	}
 	return fmt.Sprintf("%s %02d:%02d", ymd, hour, min)
+}
+
+func getHourMin(s string, r *http.Request) (int, int) {
+	ctx := appengine.NewContext(r)
+
+	//sの例1 "現在値(06:00)"
+	//sの例2 "現在値(--:--)"
+	re := regexp.MustCompile(`\d+:\d+`).Copy()
+	t := strings.Split(re.FindString(s), ":") // ["06", "00"]
+	hour, err := strconv.Atoi(t[0])
+	if err != nil {
+		log.Warningf(ctx, "Failed to conv hour. data: '%s', err: %v\n", s, err)
+		return 9, 0 // 変換できない時は9時00分にする
+	}
+	hour = hour + 9 // GMT -> JST
+
+	min, err := strconv.Atoi(t[1])
+	if err != nil {
+		log.Warningf(ctx, "Failed to conv min. data: '%s', err: %v\n", s, err)
+		return hour, 0 // 変換できない時は00分にする
+	}
+	return hour, min
 }
 
 func getFormatedPrice(s string) string {
