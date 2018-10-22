@@ -110,12 +110,17 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	//fmt.Fprintln(w, codes)
 
 	if len(codes) == 0 {
-		fmt.Println("No data found.")
+		log.Infof(ctx, "No target data.")
 	} else {
 		for _, row := range codes {
 			code := row[0].(string)
 			// codeごとに株価を取得
-			date, stockprice := doScrape(r, code)
+			date, stockprice, err := doScrape(r, code)
+			if err != nil {
+				log.Warningf(ctx, "Failed to scrape. stockcode: %s, err: %v\n", code, err)
+				continue
+			}
+
 			fmt.Fprintln(w, code, date, stockprice)
 
 			// 株価をspreadsheetに書き込み
@@ -126,6 +131,8 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 		// spreadsheetから株価を取得する
 		resp := getSheetData(r, sheetService, "STOCKPRICE_SHEETID", "stockprice")
+		//v1 := resp[0]
+		//log.Debugf(ctx, "v1: %v, v1[0]: %v, v1[1]: %v, v1[2]: %v", v1, v1[0], v1[1], v1[2])
 		//fmt.Fprintln(w, resp)
 
 		//		// codeごとの株価比率
@@ -138,9 +145,14 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		var whole_code_rate []code_rate
 		for _, row := range codes {
 			code := row[0].(string)
-			rate := calcIncreaseRate(resp, code)
+			rate, err := calcIncreaseRate(resp, code)
+			if err != nil {
+				log.Warningf(ctx, "%v\n", err)
+				continue
+			}
 			whole_code_rate = append(whole_code_rate, code_rate{code, rate})
 		}
+		log.Infof(ctx, "count whole code %v\n", len(whole_code_rate))
 
 		// 一つ前との比率が一番大きいもの順にソート
 		sort.SliceStable(whole_code_rate, func(i, j int) bool { return whole_code_rate[i].Rate[0] > whole_code_rate[j].Rate[0] })
@@ -308,7 +320,7 @@ func doScrapeDaily(r *http.Request, code string) [][]string {
 	return date_price
 }
 
-func doScrape(r *http.Request, code string) (string, string) {
+func doScrape(r *http.Request, code string) (string, string, error) {
 	ctx := appengine.NewContext(r)
 	client := urlfetch.Client(ctx)
 
@@ -326,11 +338,13 @@ func doScrape(r *http.Request, code string) (string, string) {
 	//res, err := http.Get(url)
 	res, err := client.Get(url)
 	if err != nil {
-		log.Errorf(ctx, "err: %v", err)
+		//log.Errorf(ctx, "err: %v", err)
+		return "", "", fmt.Errorf("Failed to get resp. url: '%s', err: %v", url, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		log.Errorf(ctx, "status code error: %d %s %s", res.StatusCode, res.Status, url)
+		//log.Errorf(ctx, "status code error: %d %s %s", res.StatusCode, res.Status, url)
+		return "", "", fmt.Errorf("Status code is error. statuscode: %d, status: %s, url: '%s'", res.StatusCode, res.Status, url)
 	}
 
 	// Load the HTML document
@@ -346,11 +360,23 @@ func doScrape(r *http.Request, code string) (string, string) {
 		price = s.Find(".item1").Text()
 	})
 	// 必要な形に整形して返す
-	return getFormatedDate(time, r), getFormatedPrice(price)
+	d, err := getFormatedDate(time, r)
+	if err != nil {
+		return "", "", err // 変換できない時は戻る
+	}
+	p, err := getFormatedPrice(price)
+	if err != nil {
+		return "", "", err // 変換できない時は戻る
+	}
+	//return getFormatedDate(time, r), getFormatedPrice(price, r)
+	return d, p, err
 }
 
-func getFormatedDate(s string, r *http.Request) string {
-	hour, min := getHourMin(s, r) // スクレイピングの結果から時刻を取得
+func getFormatedDate(s string, r *http.Request) (string, error) {
+	hour, min, err := getHourMin(s) // スクレイピングの結果から時刻を取得
+	if err != nil {
+		return "", err // 変換できない時は戻る
+	}
 
 	jst, _ := time.LoadLocation("Asia/Tokyo")
 	now := time.Now().In(jst)
@@ -381,11 +407,10 @@ func getFormatedDate(s string, r *http.Request) string {
 		// 日曜に取得したデータは前の金曜のもの
 		ymd = now.AddDate(0, 0, -2).Format("2006/01/02")
 	}
-	return fmt.Sprintf("%s %02d:%02d", ymd, hour, min)
+	return fmt.Sprintf("%s %02d:%02d", ymd, hour, min), err
 }
 
-func getHourMin(s string, r *http.Request) (int, int) {
-	ctx := appengine.NewContext(r)
+func getHourMin(s string) (int, int, error) {
 
 	//sの例1 "現在値(06:00)"
 	//sの例2 "現在値(--:--)"
@@ -393,25 +418,28 @@ func getHourMin(s string, r *http.Request) (int, int) {
 	t := strings.Split(re.FindString(s), ":") // ["06", "00"]
 	hour, err := strconv.Atoi(t[0])
 	if err != nil {
-		log.Warningf(ctx, "Failed to conv hour. data: '%s', err: %v\n", s, err)
-		return 9, 0 // 変換できない時は9時00分にする
+		// 変換できない時は戻る
+		return 0, 0, fmt.Errorf("Failed to conv hour. data: '%s', err: %v", s, err)
 	}
 	hour = hour + 9 // GMT -> JST
 
 	min, err := strconv.Atoi(t[1])
 	if err != nil {
-		log.Warningf(ctx, "Failed to conv min. data: '%s', err: %v\n", s, err)
-		return hour, 0 // 変換できない時は00分にする
+		return 0, 0, fmt.Errorf("Failed to conv min. data: '%s', err: %v", s, err)
 	}
-	return hour, min
+	return hour, min, err
 }
 
-func getFormatedPrice(s string) string {
+func getFormatedPrice(s string) (string, error) {
 	re := regexp.MustCompile(`[0-9,.]+`).Copy()
 	price := re.FindString(s)
+	if len(price) == 0 {
+		// priceが空の時は終了
+		return "", fmt.Errorf("Failed to fetch price. price: '%s'", price)
+	}
 	price = strings.Replace(price, ".0", "", 1)
 	price = strings.Replace(price, ",", "", -1)
-	return price
+	return price, nil
 }
 
 func writeStockpriceDaily(srv *sheets.Service, r *http.Request, code string, dp []string) {
@@ -498,19 +526,34 @@ func getSheetData(r *http.Request, srv *sheets.Service, sid string, sname string
 	log.Debugf(ctx, "type: %v", v.Type())
 	log.Debugf(ctx, resp.Range)
 	log.Debugf(ctx, "len resp.Values: %v", len(resp.Values)) //これでデータの全行数が取れる
+
+	//v1 := resp.Values[0]
+	//log.Debugf(ctx, "v1: %v, v1[0]: %v, v1[1]: %v", v1, v1[0], v1[1])
 	return resp.Values
 }
 
-func calcIncreaseRate(val [][]interface{}, code string) []float64 {
+func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
+
+	//v2 := resp[0]
+	//log.Debugf(ctx, "v2: %v, v2[0]: %v, v2[1]: %v, v2[2]: %v", v2, v2[0], v2[1], v2[2])
 	DATA_NUM := 7
 
 	var price []float64
 	// 後ろから順番に読んでいく
 	count := DATA_NUM
-	for i := 0; i < len(val); i++ {
-		v := val[len(val)-1-i] // [8316 2018/08/09 15:00 4426]
+	for i := 0; i < len(resp); i++ {
+		v := resp[len(resp)-1-i] // [8316 2018/08/09 15:00 4426]
+		//		log.Debugf(ctx, "v: %v, v[0]: %v, v[1]: %v", v, v[0], v[1])
+		if len(v) < 3 {
+			return nil, fmt.Errorf("code %s record is unsatisfied. record: %v", code, v)
+		}
 		if v[0] == code {
-			p, _ := strconv.ParseFloat(v[2].(string), 64)
+			p, err := strconv.ParseFloat(v[2].(string), 64)
+			if err != nil {
+				return nil, fmt.Errorf("code %s's price cannot be converted to ParseFloat. record: %v. err: %v", code, v, err)
+			}
+			//log.Debugf(ctx, "p: %v", p)
+
 			price = append(price, p)
 			//va := reflect.ValueOf(v[2].(string)) // 型確認
 			//log.Println(va.Type(), v[2])
@@ -538,7 +581,7 @@ func calcIncreaseRate(val [][]interface{}, code string) []float64 {
 	}
 	//log.Println(code, rate)
 	// rate ex. [1.0007303534910896 1.002781030444965 1.0013154048523822 0.997379531227253 1.0011690778898146 1.0011690778898146]
-	return rate
+	return rate, nil
 }
 
 func clearRate(srv *sheets.Service, r *http.Request) {

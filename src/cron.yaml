@@ -1,5 +1,5 @@
 cron:
 - description: "stockprice hourly"
   url: /
-  schedule: every 60 minutes from 09:00 to 15:00
+  schedule: every 60 minutes from 09:25 to 15:25
   timezone: Asia/Tokyo
