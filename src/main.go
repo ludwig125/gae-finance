@@ -131,15 +131,6 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 		// spreadsheetから株価を取得する
 		resp := getSheetData(r, sheetService, "STOCKPRICE_SHEETID", "stockprice")
-		//v1 := resp[0]
-		//log.Debugf(ctx, "v1: %v, v1[0]: %v, v1[1]: %v, v1[2]: %v", v1, v1[0], v1[1], v1[2])
-		//fmt.Fprintln(w, resp)
-
-		//		// codeごとの株価比率
-		//		type code_rate struct {
-		//			Code string
-		//			Rate []float64
-		//		}
 
 		// 全codeの株価比率
 		var whole_code_rate []code_rate
@@ -321,37 +312,16 @@ func doScrapeDaily(r *http.Request, code string) [][]string {
 }
 
 func doScrape(r *http.Request, code string) (string, string, error) {
-	ctx := appengine.NewContext(r)
-	client := urlfetch.Client(ctx)
 
-	base_url := ""
-	// リクエスト対象のURLを環境変数から読み込む
-	if v := os.Getenv("HOURLY_PRICE_URL"); v != "" {
-		base_url = v
-	} else {
-		log.Errorf(ctx, "Failed to get base_url. '%v'", v)
-		os.Exit(0)
-	}
-
-	// Request the HTML page.
-	url := base_url + code
-	//res, err := http.Get(url)
-	res, err := client.Get(url)
+	// "HOURLY_PRICE_URL"のHDML doc取得
+	doc, err := fetchWebpageDoc(r, "HOURLY_PRICE_URL", code)
 	if err != nil {
-		//log.Errorf(ctx, "err: %v", err)
-		return "", "", fmt.Errorf("Failed to get resp. url: '%s', err: %v", url, err)
+		return "", "", err
 	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		//log.Errorf(ctx, "status code error: %d %s %s", res.StatusCode, res.Status, url)
-		return "", "", fmt.Errorf("Status code is error. statuscode: %d, status: %s, url: '%s'", res.StatusCode, res.Status, url)
-	}
-
-	// Load the HTML document
-	doc, err := goquery.NewDocumentFromReader(res.Body)
-	if err != nil {
-		log.Errorf(ctx, "err: %v", err)
-	}
+	//v3 := reflect.ValueOf(doc)
+	//ctx := appengine.NewContext(r)
+	//log.Debugf(ctx, "doc type: %v", v3.Type())
+	//log.Debugf(ctx, "doc: %v", doc)
 
 	// time と priceを取得
 	var time, price string
@@ -370,6 +340,40 @@ func doScrape(r *http.Request, code string) (string, string, error) {
 	}
 	//return getFormatedDate(time, r), getFormatedPrice(price, r)
 	return d, p, err
+}
+
+func fetchWebpageDoc(r *http.Request, urlname string, code string) (*goquery.Document, error) {
+	ctx := appengine.NewContext(r)
+	client := urlfetch.Client(ctx)
+
+	base_url := ""
+	// リクエスト対象のURLを環境変数から読み込む
+	if v := os.Getenv(urlname); v != "" {
+		base_url = v
+	} else {
+		log.Errorf(ctx, "Failed to get base_url. '%v'", v)
+		os.Exit(0)
+	}
+
+	// Request the HTML page.
+	url := base_url + code
+	//res, err := http.Get(url)
+	res, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to get resp. url: '%s', err: %v", url, err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return nil, fmt.Errorf("Status code is error. statuscode: %d, status: %s, url: '%s'", res.StatusCode, res.Status, url)
+	}
+
+	// Load the HTML document
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to load html doc. err: %v", err)
+	}
+
+	return doc, nil
 }
 
 func getFormatedDate(s string, r *http.Request) (string, error) {
