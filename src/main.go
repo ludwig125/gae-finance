@@ -33,11 +33,11 @@ func start(w http.ResponseWriter, r *http.Request) {
 	log.Infof(c, "STARTING")
 }
 
-//// codeごとの株価
-//type code_price struct {
-//	Code string
-//	Price []float64
-//}
+// codeごとの株価
+type code_price struct {
+	Code  string
+	Price [][]string
+}
 
 // Dailyの株価を取得
 func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
@@ -59,19 +59,28 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 
 	//fmt.Fprintln(w, codes)
 	if len(codes) == 0 {
-		fmt.Println("No data found.")
+		log.Infof(ctx, "No target data.")
 	} else {
+		var prices []code_price
 		for _, row := range codes {
 			code := row[0].(string)
 			// codeごとに株価を取得
-			daily_price := doScrapeDaily(r, code)
-			for i := len(daily_price) - 1; i >= 0; i-- {
-				//fmt.Fprintln(w, code, daily_price[i])
-				// 日次の株価をspreadsheetに書き込み
-				writeStockpriceDaily(sheetService, r, code, daily_price[i])
+			p, err := doScrapeDaily(r, code)
+			if err != nil {
+				log.Warningf(ctx, "Failed to scrape daily price. stockcode: %s, err: %v\n", code, err)
+				continue
 			}
+			log.Warningf(ctx, "len prices. %v", len(p))
+			//for i := len(daily_price) - 1; i >= 0; i-- {
+			//	//fmt.Fprintln(w, code, daily_price[i])
+			//	// 日次の株価をspreadsheetに書き込み
+			//	writeStockpriceDaily(sheetService, r, code, daily_price[i])
+			//}
+			prices = append(prices, code_price{code, p})
 			time.Sleep(1 * time.Second) // 1秒待つ
 		}
+		log.Warningf(ctx, "prices. %v", prices)
+		writeStockpriceDaily2(sheetService, r, prices)
 	}
 }
 
@@ -117,7 +126,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 			// codeごとに株価を取得
 			date, stockprice, err := doScrape(r, code)
 			if err != nil {
-				log.Warningf(ctx, "Failed to scrape. stockcode: %s, err: %v\n", code, err)
+				log.Warningf(ctx, "Failed to scrape hourly price. stockcode: %s, err: %v\n", code, err)
 				continue
 			}
 
@@ -262,35 +271,11 @@ func readCode(srv *sheets.Service, r *http.Request) [][]interface{} {
 	return resp.Values
 }
 
-func doScrapeDaily(r *http.Request, code string) [][]string {
-	ctx := appengine.NewContext(r)
-	client := urlfetch.Client(ctx)
-
-	base_url := ""
-	// リクエスト対象のURLを環境変数から読み込む
-	if v := os.Getenv("DAILY_PRICE_URL"); v != "" {
-		base_url = v
-	} else {
-		log.Errorf(ctx, "Failed to get daily base_url. '%v'", v)
-		os.Exit(0)
-	}
-
-	// Request the HTML page.
-	url := base_url + code
-	//res, err := http.Get(url)
-	res, err := client.Get(url)
+func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
+	// "DAILY_PRICE_URL"のHDML doc取得
+	doc, err := fetchWebpageDoc(r, "DAILY_PRICE_URL", code)
 	if err != nil {
-		log.Errorf(ctx, "err: %v", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		log.Errorf(ctx, "status code error: %d %s %s", res.StatusCode, res.Status, url)
-	}
-
-	// Load the HTML document
-	doc, err := goquery.NewDocumentFromReader(res.Body)
-	if err != nil {
-		log.Errorf(ctx, "err: %v", err)
+		return nil, err
 	}
 
 	// date と priceを取得
@@ -308,7 +293,7 @@ func doScrapeDaily(r *http.Request, code string) [][]string {
 		})
 		date_price = append(date_price, arr)
 	})
-	return date_price
+	return date_price, nil
 }
 
 func doScrape(r *http.Request, code string) (string, string, error) {
@@ -446,7 +431,7 @@ func getFormatedPrice(s string) (string, error) {
 	return price, nil
 }
 
-func writeStockpriceDaily(srv *sheets.Service, r *http.Request, code string, dp []string) {
+func writeStockpriceDaily2(srv *sheets.Service, r *http.Request, prices []code_price) {
 	ctx := appengine.NewContext(r)
 
 	sheetId := ""
@@ -459,13 +444,31 @@ func writeStockpriceDaily(srv *sheets.Service, r *http.Request, code string, dp 
 	}
 	writeRange := "daily"
 
+	log.Debugf(ctx, "%s, %s", sheetId, writeRange)
+
+	// spreadsheetに書き込み対象の行列を作成
+	var matrix = make([][]interface{}, 0)
+	for _, p := range prices {
+		for _, daily_p := range p.Price {
+			var ele = make([]interface{}, 0)
+			ele = append(ele, p.Code)
+			for _, v := range daily_p {
+				//log.Errorf(ctx, "code '%s', j: %s", p.Code, daily_p)
+				ele = append(ele, v)
+			}
+			// ele ex. [8306 8/23 320 322 317 319 8068000 319.0]
+			matrix = append(matrix, ele)
+		}
+	}
+	log.Errorf(ctx, "code prices %v", matrix)
+	log.Errorf(ctx, "code prices %T", matrix)
 	valueRange := &sheets.ValueRange{
 		MajorDimension: "ROWS",
-		Values: [][]interface{}{
-			// code, 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値
-			[]interface{}{code, dp[0], dp[1], dp[2], dp[3], dp[4], dp[5], dp[6]},
-		},
+		//matrix : [][]interface{} 型
+		// [銘柄, 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値] * 日付
+		Values: matrix,
 	}
+
 	resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
 	if err != nil {
 		log.Errorf(ctx, "Unable to write value. %v", err)
@@ -475,6 +478,36 @@ func writeStockpriceDaily(srv *sheets.Service, r *http.Request, code string, dp 
 		log.Errorf(ctx, "HTTPstatus error. %v", status)
 	}
 }
+
+//func writeStockpriceDaily(srv *sheets.Service, r *http.Request, code string, dp []string) {
+//	ctx := appengine.NewContext(r)
+//
+//	sheetId := ""
+//	// sheetIdを環境変数から読み込む
+//	if v := os.Getenv("STOCKPRICE_SHEETID"); v != "" {
+//		sheetId = v
+//	} else {
+//		log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
+//		os.Exit(0)
+//	}
+//	writeRange := "daily"
+//
+//	valueRange := &sheets.ValueRange{
+//		MajorDimension: "ROWS",
+//		Values: [][]interface{}{
+//			// code, 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値
+//			[]interface{}{code, dp[0], dp[1], dp[2], dp[3], dp[4], dp[5], dp[6]},
+//		},
+//	}
+//	resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
+//	if err != nil {
+//		log.Errorf(ctx, "Unable to write value. %v", err)
+//	}
+//	status := resp.ServerResponse.HTTPStatusCode
+//	if status != 200 {
+//		log.Errorf(ctx, "HTTPstatus error. %v", status)
+//	}
+//}
 
 func writeStockprice(srv *sheets.Service, r *http.Request, code string, date string, stockprice string) {
 	ctx := appengine.NewContext(r)
