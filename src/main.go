@@ -60,28 +60,85 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	//fmt.Fprintln(w, codes)
 	if len(codes) == 0 {
 		log.Infof(ctx, "No target data.")
-	} else {
-		var prices []code_price
-		for _, row := range codes {
-			code := row[0].(string)
-			// codeごとに株価を取得
-			p, err := doScrapeDaily(r, code)
-			if err != nil {
-				log.Warningf(ctx, "Failed to scrape daily price. stockcode: %s, err: %v\n", code, err)
-				continue
-			}
-			log.Warningf(ctx, "len prices. %v", len(p))
-			//for i := len(daily_price) - 1; i >= 0; i-- {
-			//	//fmt.Fprintln(w, code, daily_price[i])
-			//	// 日次の株価をspreadsheetに書き込み
-			//	writeStockpriceDaily(sheetService, r, code, daily_price[i])
-			//}
-			prices = append(prices, code_price{code, p})
-			time.Sleep(1 * time.Second) // 1秒待つ
-		}
-		log.Warningf(ctx, "prices. %v", prices)
-		writeStockpriceDaily2(sheetService, r, prices)
+		os.Exit(0)
 	}
+	MAX := 2
+	d := len(codes) / MAX
+	m := len(codes) % MAX
+
+	for i := 0; i < d; i++ {
+		partial := codes[MAX*i : MAX*(i+1)]
+		log.Warningf(ctx, "partial %v, type %T\n", partial, partial)
+		// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
+		err := processPartialCode(partial, sheetService, r)
+		if err != nil {
+			log.Warningf(ctx, "%v\n", err)
+		}
+	}
+	if m > 0 {
+		partial := codes[MAX*d:]
+		// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
+		err := processPartialCode(partial, sheetService, r)
+		if err != nil {
+			log.Warningf(ctx, "%v\n", err)
+		}
+
+	}
+
+	//	count := 0
+	//	partial := []string{}
+	//	unProcessedCode := len(codes)
+	//	log.Warningf(ctx, "unProcessedCode: %v, codes %v\n", unProcessedCode, codes)
+	//
+	//	for _, row := range codes {
+	//		log.Warningf(ctx, "unProcessedCode: %v, codes %v\n", unProcessedCode, codes)
+	//		code := row[0].(string) // row's type: []interface {}. ex. [8411]
+	//
+	//		log.Warningf(ctx, "unProcessedCode: %v\n", unProcessedCode)
+	//		if (count < MAX) && (unProcessedCode >= MAX) {
+	//			// MAXまでcodeを詰め込む
+	//			count++
+	//			partial = append(partial, code)
+	//			continue
+	//		}
+	//		// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
+	//		err := processPartialCode(partial, sheetService, r)
+	//		if err != nil {
+	//			log.Warningf(ctx, "%v\n", err)
+	//		}
+	//		log.Debugf(ctx, "unProcessedCode: %v\n", unProcessedCode)
+	//		unProcessedCode -= MAX
+	//		log.Warningf(ctx, "count: %d, partial: %v\n", count, partial)
+	//		count = 0
+	//		partial = nil
+	//		time.Sleep(10 * time.Second) // 10秒待つ
+	//		log.Infof(ctx, "unProcessedCode: %v\n", unProcessedCode)
+	//	}
+}
+
+func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Request) error {
+	var prices []code_price
+
+	var allErrors string
+	for _, v := range codes {
+		code := v[0].(string) // row's type: []interface {}. ex. [8411]
+
+		// codeごとに株価を取得
+		p, err := doScrapeDaily(r, code)
+		if err != nil {
+			allErrors += fmt.Sprintf("failed to scrape. code: %s, err: %v. ", code, err)
+			continue
+		}
+		prices = append(prices, code_price{code, p})
+		time.Sleep(1 * time.Second) // 1秒待つ
+	}
+	//log.Warningf(ctx, "prices. %v", prices)
+	writeStockpriceDaily(s, r, prices)
+
+	if allErrors != "" {
+		return fmt.Errorf(allErrors)
+	}
+	return nil
 }
 
 // codeごとの株価比率
@@ -431,7 +488,7 @@ func getFormatedPrice(s string) (string, error) {
 	return price, nil
 }
 
-func writeStockpriceDaily2(srv *sheets.Service, r *http.Request, prices []code_price) {
+func writeStockpriceDaily(srv *sheets.Service, r *http.Request, prices []code_price) {
 	ctx := appengine.NewContext(r)
 
 	sheetId := ""
@@ -444,7 +501,7 @@ func writeStockpriceDaily2(srv *sheets.Service, r *http.Request, prices []code_p
 	}
 	writeRange := "daily"
 
-	log.Debugf(ctx, "%s, %s", sheetId, writeRange)
+	//log.Debugf(ctx, "%s, %s", sheetId, writeRange)
 
 	// spreadsheetに書き込み対象の行列を作成
 	var matrix = make([][]interface{}, 0)
@@ -453,15 +510,14 @@ func writeStockpriceDaily2(srv *sheets.Service, r *http.Request, prices []code_p
 			var ele = make([]interface{}, 0)
 			ele = append(ele, p.Code)
 			for _, v := range daily_p {
-				//log.Errorf(ctx, "code '%s', j: %s", p.Code, daily_p)
 				ele = append(ele, v)
 			}
 			// ele ex. [8306 8/23 320 322 317 319 8068000 319.0]
 			matrix = append(matrix, ele)
 		}
 	}
-	log.Errorf(ctx, "code prices %v", matrix)
-	log.Errorf(ctx, "code prices %T", matrix)
+	//log.Errorf(ctx, "code prices %v", matrix)
+	//log.Errorf(ctx, "code prices %T", matrix)
 	valueRange := &sheets.ValueRange{
 		MajorDimension: "ROWS",
 		//matrix : [][]interface{} 型
