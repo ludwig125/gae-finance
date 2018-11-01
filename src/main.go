@@ -55,68 +55,45 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// spreadsheetから銘柄コードを取得
-	codes := readCode(sheetService, r)
+	codes := readCode(sheetService, r, "ichibu")
 
 	//fmt.Fprintln(w, codes)
 	if len(codes) == 0 {
 		log.Infof(ctx, "No target data.")
 		os.Exit(0)
 	}
-	MAX := 2
+	MAX := 100
 	d := len(codes) / MAX
 	m := len(codes) % MAX
 
-	for i := 0; i < d; i++ {
-		partial := codes[MAX*i : MAX*(i+1)]
-		log.Warningf(ctx, "partial %v, type %T\n", partial, partial)
-		// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
-		err := processPartialCode(partial, sheetService, r)
-		if err != nil {
-			log.Warningf(ctx, "%v\n", err)
+	if d > 0 {
+		for i := 0; i < d; i++ {
+			partial := codes[MAX*i : MAX*(i+1)]
+			//log.Warningf(ctx, "partial %v, type %T\n", partial, partial)
+			// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
+			processPartialCode(partial, sheetService, r)
+			//err := processPartialCode(partial, sheetService, r)
+			//if err != nil {
+			//	log.Warningf(ctx, "%v\n", err)
+			//}
 		}
 	}
 	if m > 0 {
 		partial := codes[MAX*d:]
 		// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
-		err := processPartialCode(partial, sheetService, r)
-		if err != nil {
-			log.Warningf(ctx, "%v\n", err)
-		}
+		processPartialCode(partial, sheetService, r)
+		//err := processPartialCode(partial, sheetService, r)
+		//if err != nil {
+		//	log.Warningf(ctx, "%v\n", err)
+		//}
 
 	}
 
-	//	count := 0
-	//	partial := []string{}
-	//	unProcessedCode := len(codes)
-	//	log.Warningf(ctx, "unProcessedCode: %v, codes %v\n", unProcessedCode, codes)
-	//
-	//	for _, row := range codes {
-	//		log.Warningf(ctx, "unProcessedCode: %v, codes %v\n", unProcessedCode, codes)
-	//		code := row[0].(string) // row's type: []interface {}. ex. [8411]
-	//
-	//		log.Warningf(ctx, "unProcessedCode: %v\n", unProcessedCode)
-	//		if (count < MAX) && (unProcessedCode >= MAX) {
-	//			// MAXまでcodeを詰め込む
-	//			count++
-	//			partial = append(partial, code)
-	//			continue
-	//		}
-	//		// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
-	//		err := processPartialCode(partial, sheetService, r)
-	//		if err != nil {
-	//			log.Warningf(ctx, "%v\n", err)
-	//		}
-	//		log.Debugf(ctx, "unProcessedCode: %v\n", unProcessedCode)
-	//		unProcessedCode -= MAX
-	//		log.Warningf(ctx, "count: %d, partial: %v\n", count, partial)
-	//		count = 0
-	//		partial = nil
-	//		time.Sleep(10 * time.Second) // 10秒待つ
-	//		log.Infof(ctx, "unProcessedCode: %v\n", unProcessedCode)
-	//	}
 }
 
-func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Request) error {
+func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Request) {
+	ctx := appengine.NewContext(r)
+
 	var prices []code_price
 
 	var allErrors string
@@ -126,19 +103,23 @@ func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Reques
 		// codeごとに株価を取得
 		p, err := doScrapeDaily(r, code)
 		if err != nil {
-			allErrors += fmt.Sprintf("failed to scrape. code: %s, err: %v. ", code, err)
+			//log.Infof(ctx, "err: %v", err)
+			allErrors += fmt.Sprintf("%v ", err)
 			continue
 		}
 		prices = append(prices, code_price{code, p})
+		//log.Infof(ctx, "code: %s, prices: %v", code, prices)
 		time.Sleep(1 * time.Second) // 1秒待つ
+	}
+	if allErrors != "" {
+		//return fmt.Errorf("failed to scrape. code: [%s]", allErrors)
+		// 複数の銘柄で起きたエラーをまとめて出力
+		log.Warningf(ctx, "failed to scrape. code: [%s]\n", allErrors)
 	}
 	//log.Warningf(ctx, "prices. %v", prices)
 	writeStockpriceDaily(s, r, prices)
 
-	if allErrors != "" {
-		return fmt.Errorf(allErrors)
-	}
-	return nil
+	return
 }
 
 // codeごとの株価比率
@@ -171,7 +152,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// spreadsheetから銘柄コードを取得
-	codes := readCode(sheetService, r)
+	codes := readCode(sheetService, r, "code")
 
 	//fmt.Fprintln(w, codes)
 
@@ -303,7 +284,7 @@ func getHolidays(srv *sheets.Service, r *http.Request) [][]interface{} {
 	return resp.Values
 }
 
-func readCode(srv *sheets.Service, r *http.Request) [][]interface{} {
+func readCode(srv *sheets.Service, r *http.Request, sheet string) [][]interface{} {
 	ctx := appengine.NewContext(r)
 
 	// 'code' worksheet を読み取り
@@ -316,7 +297,8 @@ func readCode(srv *sheets.Service, r *http.Request) [][]interface{} {
 		log.Errorf(ctx, "Failed to get codes sheetId. '%v'", v)
 		os.Exit(0)
 	}
-	readRange := "code"
+	//readRange := "code"
+	readRange := sheet
 	resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
 	if err != nil {
 		log.Errorf(ctx, "Unable to retrieve data from sheet: %v", err)
@@ -340,16 +322,28 @@ func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
 	doc.Find(".m-tableType01_table table tbody tr").Each(func(i int, s *goquery.Selection) {
 		date := s.Find(".a-taC").Text()
 		re := regexp.MustCompile(`[0-9]+/[0-9]+`).Copy()
+		// 日付を取得
 		date = re.FindString(date)
 
 		var arr []string
 		arr = append(arr, date)
+		// 始値, 高値, 安値, 終値, 売買高, 修正後終値を順に取得
 		s.Find(".a-taR").Each(func(j int, s2 *goquery.Selection) {
 			// ","を取り除く
 			arr = append(arr, strings.Replace(s2.Text(), ",", "", -1))
 		})
+		// 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値を一行ごとに格納
 		date_price = append(date_price, arr)
 	})
+	//ctx := appengine.NewContext(r)
+	//log.Errorf(ctx, "len date_price %d", len(date_price[0]))
+	if len(date_price[0]) != 7 {
+		// 以下の７要素を取れなかったら何かおかしい
+		// 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値
+		// リダイレクトされて別のページに飛ばされている可能性もある
+		// 失敗した銘柄を返す
+		return nil, fmt.Errorf(code)
+	}
 	return date_price, nil
 }
 

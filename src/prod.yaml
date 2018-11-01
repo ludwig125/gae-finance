@@ -16,7 +16,7 @@ env_variables:
   ENV: "prod"
   HOLIDAY_SHEETID: "1ExUKJy5SfKb62wycg1jOiHHeQ1t3hGyE2Vau5RkKzfk"
   CODE_SHEETID: "1ExUKJy5SfKb62wycg1jOiHHeQ1t3hGyE2Vau5RkKzfk"
-  DAILY_PRICE_URL: "https://www.nikkei.com/nkd/company/chart/?scode="
+  DAILY_PRICE_URL: "https://www.nikkei.com/nkd/company/history/dprice/?scode="
   HOURLY_PRICE_URL: "https://www.nikkei.com/smartchart/?code="
   STOCKPRICE_SHEETID: "1FcwyVrMIZ5xGrFaJvIg0SVpJPsf9Q7WabVxBXRxpUZA"
   RATE_SHEETID: "1ZQK1SdjLS0ZCrKL_0A2jrbG-nxEcf-h4UIDgXAXCfMM"
