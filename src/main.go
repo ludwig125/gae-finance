@@ -33,12 +33,6 @@ func start(w http.ResponseWriter, r *http.Request) {
 	log.Infof(c, "STARTING")
 }
 
-// codeごとの株価
-type code_price struct {
-	Code  string
-	Price [][]string
-}
-
 // Dailyの株価を取得
 func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 
@@ -91,6 +85,12 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 
 }
 
+// codeごとの株価
+type code_price struct {
+	Code  string
+	Price []string
+}
+
 func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Request) {
 	ctx := appengine.NewContext(r)
 
@@ -101,13 +101,17 @@ func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Reques
 		code := v[0].(string) // row's type: []interface {}. ex. [8411]
 
 		// codeごとに株価を取得
+		// pは一ヶ月分の株価
 		p, err := doScrapeDaily(r, code)
 		if err != nil {
 			//log.Infof(ctx, "err: %v", err)
 			allErrors += fmt.Sprintf("%v ", err)
 			continue
 		}
-		prices = append(prices, code_price{code, p})
+		// code, 株価の単位でpricesに格納
+		for _, dp := range p {
+			prices = append(prices, code_price{code, dp})
+		}
 		//log.Infof(ctx, "code: %s, prices: %v", code, prices)
 		time.Sleep(1 * time.Second) // 1秒待つ
 	}
@@ -117,8 +121,15 @@ func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Reques
 		log.Warningf(ctx, "failed to scrape. code: [%s]\n", allErrors)
 	}
 	//log.Warningf(ctx, "prices. %v", prices)
-	removeDuplicatedPrice(r, prices)
-	writeStockpriceDaily(s, r, prices)
+	// spreadsheetから株価を取得する
+	resp := getSheetData(r, s, "DAILYPRICE_SHEETID", "daily")
+
+	// シートに存在しないものだけを抽出
+	uniqPrices := getUniqPrice(r, prices, resp)
+	// すでにシートに存在するデータは書き込まない
+	if uniqPrices != nil {
+		writeStockpriceDaily(s, r, uniqPrices)
+	}
 
 	return
 }
@@ -486,13 +497,30 @@ func getFormatedPrice(s string) (string, error) {
 	return price, nil
 }
 
-func removeDuplicatedPrice(r *http.Request, prices []code_price) {
+func getUniqPrice(r *http.Request, prices []code_price, resp [][]interface{}) []code_price {
 	ctx := appengine.NewContext(r)
 
-	for _, p := range prices {
-		log.Errorf(ctx, "code %s, price %s", p.Code, p.Price)
+	sheetData := map[string]bool{}
+	for _, v := range resp {
+		// codeと日付の組をmapに登録
+		cd := fmt.Sprintf("%s %s", v[0], v[1])
+		sheetData[cd] = true
+		//log.Errorf(ctx, "code date %v", d)
 	}
 
+	var uniqPrices []code_price
+	for _, p := range prices {
+		//log.Debugf(ctx, "code price %s %s", p.Code, p.Price)
+		// codeと日付の組をmapに登録済みのデータと照合
+		cd := fmt.Sprintf("%s %s", p.Code, p.Price[0])
+		if !sheetData[cd] {
+			uniqPrices = append(uniqPrices, code_price{p.Code, p.Price})
+			//log.Debugf(ctx, "uniq code price %s %v", p.Code, p.Price)
+		} else {
+			log.Debugf(ctx, "duplicated code price %s %v", p.Code, p.Price)
+		}
+	}
+	return uniqPrices
 }
 
 func writeStockpriceDaily(srv *sheets.Service, r *http.Request, prices []code_price) {
@@ -513,18 +541,15 @@ func writeStockpriceDaily(srv *sheets.Service, r *http.Request, prices []code_pr
 	// spreadsheetに書き込み対象の行列を作成
 	var matrix = make([][]interface{}, 0)
 	for _, p := range prices {
-		for _, daily_p := range p.Price {
-			var ele = make([]interface{}, 0)
-			ele = append(ele, p.Code)
-			for _, v := range daily_p {
-				ele = append(ele, v)
-			}
-			// ele ex. [8306 8/23 320 322 317 319 8068000 319.0]
-			matrix = append(matrix, ele)
+		var ele = make([]interface{}, 0)
+		ele = append(ele, p.Code)
+		for _, v := range p.Price {
+			ele = append(ele, v)
 		}
+		// ele ex. [8306 8/23 320 322 317 319 8068000 319.0]
+		matrix = append(matrix, ele)
 	}
 	//log.Errorf(ctx, "code prices %v", matrix)
-	//log.Errorf(ctx, "code prices %T", matrix)
 	valueRange := &sheets.ValueRange{
 		MajorDimension: "ROWS",
 		//matrix : [][]interface{} 型
