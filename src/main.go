@@ -33,12 +33,6 @@ func start(w http.ResponseWriter, r *http.Request) {
 	log.Infof(c, "STARTING")
 }
 
-//// codeごとの株価
-//type code_price struct {
-//	Code string
-//	Price []float64
-//}
-
 // Dailyの株価を取得
 func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 
@@ -55,24 +49,89 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// spreadsheetから銘柄コードを取得
-	codes := readCode(sheetService, r)
+	codes := readCode(sheetService, r, "ichibu")
 
 	//fmt.Fprintln(w, codes)
 	if len(codes) == 0 {
-		fmt.Println("No data found.")
-	} else {
-		for _, row := range codes {
-			code := row[0].(string)
-			// codeごとに株価を取得
-			daily_price := doScrapeDaily(r, code)
-			for i := len(daily_price) - 1; i >= 0; i-- {
-				//fmt.Fprintln(w, code, daily_price[i])
-				// 日次の株価をspreadsheetに書き込み
-				writeStockpriceDaily(sheetService, r, code, daily_price[i])
-			}
-			time.Sleep(1 * time.Second) // 1秒待つ
+		log.Infof(ctx, "No target data.")
+		os.Exit(0)
+	}
+	MAX := 100
+	d := len(codes) / MAX
+	m := len(codes) % MAX
+
+	if d > 0 {
+		for i := 0; i < d; i++ {
+			partial := codes[MAX*i : MAX*(i+1)]
+			//log.Warningf(ctx, "partial %v, type %T\n", partial, partial)
+			// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
+			processPartialCode(partial, sheetService, r)
+			//err := processPartialCode(partial, sheetService, r)
+			//if err != nil {
+			//	log.Warningf(ctx, "%v\n", err)
+			//}
 		}
 	}
+	if m > 0 {
+		partial := codes[MAX*d:]
+		// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
+		processPartialCode(partial, sheetService, r)
+		//err := processPartialCode(partial, sheetService, r)
+		//if err != nil {
+		//	log.Warningf(ctx, "%v\n", err)
+		//}
+
+	}
+
+}
+
+// codeごとの株価
+type code_price struct {
+	Code  string
+	Price []string
+}
+
+func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Request) {
+	ctx := appengine.NewContext(r)
+
+	var prices []code_price
+
+	var allErrors string
+	for _, v := range codes {
+		code := v[0].(string) // row's type: []interface {}. ex. [8411]
+
+		// codeごとに株価を取得
+		// pは一ヶ月分の株価
+		p, err := doScrapeDaily(r, code)
+		if err != nil {
+			//log.Infof(ctx, "err: %v", err)
+			allErrors += fmt.Sprintf("%v ", err)
+			continue
+		}
+		// code, 株価の単位でpricesに格納
+		for _, dp := range p {
+			prices = append(prices, code_price{code, dp})
+		}
+		//log.Infof(ctx, "code: %s, prices: %v", code, prices)
+		time.Sleep(1 * time.Second) // 1秒待つ
+	}
+	if allErrors != "" {
+		//return fmt.Errorf("failed to scrape. code: [%s]", allErrors)
+		// 複数の銘柄で起きたエラーをまとめて出力
+		log.Warningf(ctx, "failed to scrape. code: [%s]\n", allErrors)
+	}
+	//log.Warningf(ctx, "prices. %v", prices)
+	// spreadsheetから株価を取得する
+	resp := getSheetData(r, s, "DAILYPRICE_SHEETID", "daily")
+
+	// シートに存在しないものだけを抽出
+	uniqPrices := getUniqPrice(r, prices, resp)
+	// すでにシートに存在するデータは書き込まない
+	if uniqPrices != nil {
+		writeStockpriceDaily(s, r, uniqPrices)
+	}
+
+	return
 }
 
 // codeごとの株価比率
@@ -105,7 +164,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// spreadsheetから銘柄コードを取得
-	codes := readCode(sheetService, r)
+	codes := readCode(sheetService, r, "code")
 
 	//fmt.Fprintln(w, codes)
 
@@ -117,7 +176,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 			// codeごとに株価を取得
 			date, stockprice, err := doScrape(r, code)
 			if err != nil {
-				log.Warningf(ctx, "Failed to scrape. stockcode: %s, err: %v\n", code, err)
+				log.Warningf(ctx, "Failed to scrape hourly price. stockcode: %s, err: %v\n", code, err)
 				continue
 			}
 
@@ -131,15 +190,6 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 		// spreadsheetから株価を取得する
 		resp := getSheetData(r, sheetService, "STOCKPRICE_SHEETID", "stockprice")
-		//v1 := resp[0]
-		//log.Debugf(ctx, "v1: %v, v1[0]: %v, v1[1]: %v, v1[2]: %v", v1, v1[0], v1[1], v1[2])
-		//fmt.Fprintln(w, resp)
-
-		//		// codeごとの株価比率
-		//		type code_rate struct {
-		//			Code string
-		//			Rate []float64
-		//		}
 
 		// 全codeの株価比率
 		var whole_code_rate []code_rate
@@ -246,7 +296,7 @@ func getHolidays(srv *sheets.Service, r *http.Request) [][]interface{} {
 	return resp.Values
 }
 
-func readCode(srv *sheets.Service, r *http.Request) [][]interface{} {
+func readCode(srv *sheets.Service, r *http.Request, sheet string) [][]interface{} {
 	ctx := appengine.NewContext(r)
 
 	// 'code' worksheet を読み取り
@@ -259,7 +309,8 @@ func readCode(srv *sheets.Service, r *http.Request) [][]interface{} {
 		log.Errorf(ctx, "Failed to get codes sheetId. '%v'", v)
 		os.Exit(0)
 	}
-	readRange := "code"
+	//readRange := "code"
+	readRange := sheet
 	resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
 	if err != nil {
 		log.Errorf(ctx, "Unable to retrieve data from sheet: %v", err)
@@ -271,35 +322,11 @@ func readCode(srv *sheets.Service, r *http.Request) [][]interface{} {
 	return resp.Values
 }
 
-func doScrapeDaily(r *http.Request, code string) [][]string {
-	ctx := appengine.NewContext(r)
-	client := urlfetch.Client(ctx)
-
-	base_url := ""
-	// リクエスト対象のURLを環境変数から読み込む
-	if v := os.Getenv("DAILY_PRICE_URL"); v != "" {
-		base_url = v
-	} else {
-		log.Errorf(ctx, "Failed to get daily base_url. '%v'", v)
-		os.Exit(0)
-	}
-
-	// Request the HTML page.
-	url := base_url + code
-	//res, err := http.Get(url)
-	res, err := client.Get(url)
+func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
+	// "DAILY_PRICE_URL"のHDML doc取得
+	doc, err := fetchWebpageDoc(r, "DAILY_PRICE_URL", code)
 	if err != nil {
-		log.Errorf(ctx, "err: %v", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		log.Errorf(ctx, "status code error: %d %s %s", res.StatusCode, res.Status, url)
-	}
-
-	// Load the HTML document
-	doc, err := goquery.NewDocumentFromReader(res.Body)
-	if err != nil {
-		log.Errorf(ctx, "err: %v", err)
+		return nil, err
 	}
 
 	// date と priceを取得
@@ -307,51 +334,45 @@ func doScrapeDaily(r *http.Request, code string) [][]string {
 	doc.Find(".m-tableType01_table table tbody tr").Each(func(i int, s *goquery.Selection) {
 		date := s.Find(".a-taC").Text()
 		re := regexp.MustCompile(`[0-9]+/[0-9]+`).Copy()
+		// 日付を取得
 		date = re.FindString(date)
 
 		var arr []string
 		arr = append(arr, date)
+		// 始値, 高値, 安値, 終値, 売買高, 修正後終値を順に取得
 		s.Find(".a-taR").Each(func(j int, s2 *goquery.Selection) {
 			// ","を取り除く
 			arr = append(arr, strings.Replace(s2.Text(), ",", "", -1))
 		})
+		// 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値を一行ごとに格納
 		date_price = append(date_price, arr)
 	})
-	return date_price
+	//ctx := appengine.NewContext(r)
+	//log.Errorf(ctx, "date_price %d", date_price[0])
+	if len(date_price) == 0 {
+		return nil, fmt.Errorf("%s no data", code)
+	}
+	if len(date_price[0]) != 7 {
+		// 以下の７要素を取れなかったら何かおかしい
+		// 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値
+		// リダイレクトされて別のページに飛ばされている可能性もある
+		// 失敗した銘柄を返す
+		return nil, fmt.Errorf("%s doesn't have enough elems", code)
+	}
+	return date_price, nil
 }
 
 func doScrape(r *http.Request, code string) (string, string, error) {
-	ctx := appengine.NewContext(r)
-	client := urlfetch.Client(ctx)
 
-	base_url := ""
-	// リクエスト対象のURLを環境変数から読み込む
-	if v := os.Getenv("HOURLY_PRICE_URL"); v != "" {
-		base_url = v
-	} else {
-		log.Errorf(ctx, "Failed to get base_url. '%v'", v)
-		os.Exit(0)
-	}
-
-	// Request the HTML page.
-	url := base_url + code
-	//res, err := http.Get(url)
-	res, err := client.Get(url)
+	// "HOURLY_PRICE_URL"のHDML doc取得
+	doc, err := fetchWebpageDoc(r, "HOURLY_PRICE_URL", code)
 	if err != nil {
-		//log.Errorf(ctx, "err: %v", err)
-		return "", "", fmt.Errorf("Failed to get resp. url: '%s', err: %v", url, err)
+		return "", "", err
 	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		//log.Errorf(ctx, "status code error: %d %s %s", res.StatusCode, res.Status, url)
-		return "", "", fmt.Errorf("Status code is error. statuscode: %d, status: %s, url: '%s'", res.StatusCode, res.Status, url)
-	}
-
-	// Load the HTML document
-	doc, err := goquery.NewDocumentFromReader(res.Body)
-	if err != nil {
-		log.Errorf(ctx, "err: %v", err)
-	}
+	//v3 := reflect.ValueOf(doc)
+	//ctx := appengine.NewContext(r)
+	//log.Debugf(ctx, "doc type: %v", v3.Type())
+	//log.Debugf(ctx, "doc: %v", doc)
 
 	// time と priceを取得
 	var time, price string
@@ -370,6 +391,40 @@ func doScrape(r *http.Request, code string) (string, string, error) {
 	}
 	//return getFormatedDate(time, r), getFormatedPrice(price, r)
 	return d, p, err
+}
+
+func fetchWebpageDoc(r *http.Request, urlname string, code string) (*goquery.Document, error) {
+	ctx := appengine.NewContext(r)
+	client := urlfetch.Client(ctx)
+
+	base_url := ""
+	// リクエスト対象のURLを環境変数から読み込む
+	if v := os.Getenv(urlname); v != "" {
+		base_url = v
+	} else {
+		log.Errorf(ctx, "Failed to get base_url. '%v'", v)
+		os.Exit(0)
+	}
+
+	// Request the HTML page.
+	url := base_url + code
+	//res, err := http.Get(url)
+	res, err := client.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to get resp. url: '%s', err: %v", url, err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != 200 {
+		return nil, fmt.Errorf("Status code is error. statuscode: %d, status: %s, url: '%s'", res.StatusCode, res.Status, url)
+	}
+
+	// Load the HTML document
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to load html doc. err: %v", err)
+	}
+
+	return doc, nil
 }
 
 func getFormatedDate(s string, r *http.Request) (string, error) {
@@ -442,12 +497,38 @@ func getFormatedPrice(s string) (string, error) {
 	return price, nil
 }
 
-func writeStockpriceDaily(srv *sheets.Service, r *http.Request, code string, dp []string) {
+func getUniqPrice(r *http.Request, prices []code_price, resp [][]interface{}) []code_price {
+	ctx := appengine.NewContext(r)
+
+	sheetData := map[string]bool{}
+	for _, v := range resp {
+		// codeと日付の組をmapに登録
+		cd := fmt.Sprintf("%s %s", v[0], v[1])
+		sheetData[cd] = true
+		//log.Errorf(ctx, "code date %v", d)
+	}
+
+	var uniqPrices []code_price
+	for _, p := range prices {
+		//log.Debugf(ctx, "code price %s %s", p.Code, p.Price)
+		// codeと日付の組をmapに登録済みのデータと照合
+		cd := fmt.Sprintf("%s %s", p.Code, p.Price[0])
+		if !sheetData[cd] {
+			uniqPrices = append(uniqPrices, code_price{p.Code, p.Price})
+			//log.Debugf(ctx, "uniq code price %s %v", p.Code, p.Price)
+		} else {
+			log.Debugf(ctx, "duplicated code price %s %v", p.Code, p.Price)
+		}
+	}
+	return uniqPrices
+}
+
+func writeStockpriceDaily(srv *sheets.Service, r *http.Request, prices []code_price) {
 	ctx := appengine.NewContext(r)
 
 	sheetId := ""
 	// sheetIdを環境変数から読み込む
-	if v := os.Getenv("STOCKPRICE_SHEETID"); v != "" {
+	if v := os.Getenv("DAILYPRICE_SHEETID"); v != "" {
 		sheetId = v
 	} else {
 		log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
@@ -455,13 +536,27 @@ func writeStockpriceDaily(srv *sheets.Service, r *http.Request, code string, dp 
 	}
 	writeRange := "daily"
 
+	//log.Debugf(ctx, "%s, %s", sheetId, writeRange)
+
+	// spreadsheetに書き込み対象の行列を作成
+	var matrix = make([][]interface{}, 0)
+	for _, p := range prices {
+		var ele = make([]interface{}, 0)
+		ele = append(ele, p.Code)
+		for _, v := range p.Price {
+			ele = append(ele, v)
+		}
+		// ele ex. [8306 8/23 320 322 317 319 8068000 319.0]
+		matrix = append(matrix, ele)
+	}
+	//log.Errorf(ctx, "code prices %v", matrix)
 	valueRange := &sheets.ValueRange{
 		MajorDimension: "ROWS",
-		Values: [][]interface{}{
-			// code, 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値
-			[]interface{}{code, dp[0], dp[1], dp[2], dp[3], dp[4], dp[5], dp[6]},
-		},
+		//matrix : [][]interface{} 型
+		// [銘柄, 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値] * 日付
+		Values: matrix,
 	}
+
 	resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
 	if err != nil {
 		log.Errorf(ctx, "Unable to write value. %v", err)
