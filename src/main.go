@@ -6,7 +6,7 @@ import (
 	//"log"
 	"net/http"
 	"os"
-	"reflect"
+	//"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -123,6 +123,9 @@ func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Reques
 	//log.Warningf(ctx, "prices. %v", prices)
 	// spreadsheetから株価を取得する
 	resp := getSheetData(r, s, "DAILYPRICE_SHEETID", "daily")
+	if resp == nil {
+		return
+	}
 
 	// シートに存在しないものだけを抽出
 	uniqPrices := getUniqPrice(r, prices, resp)
@@ -190,6 +193,9 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 		// spreadsheetから株価を取得する
 		resp := getSheetData(r, sheetService, "STOCKPRICE_SHEETID", "stockprice")
+		if resp == nil {
+			return
+		}
 
 		// 全codeの株価比率
 		var whole_code_rate []code_rate
@@ -557,13 +563,28 @@ func writeStockpriceDaily(srv *sheets.Service, r *http.Request, prices []code_pr
 		Values: matrix,
 	}
 
-	resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
-	if err != nil {
-		log.Errorf(ctx, "Unable to write value. %v", err)
-	}
-	status := resp.ServerResponse.HTTPStatusCode
-	if status != 200 {
-		log.Errorf(ctx, "HTTPstatus error. %v", status)
+	var MaxRetries = 3
+	attempt := 0
+	for {
+		// MaxRetries を超えていたら終了
+		if attempt >= MaxRetries {
+			log.Errorf(ctx, "Failed to retrieve data from sheet. attempt: %d", attempt)
+			return
+		}
+		attempt = attempt + 1
+		resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
+		if err != nil {
+			log.Warningf(ctx, "Unable to write value. %v. attempt: %d", err, attempt)
+			time.Sleep(1 * time.Second) // 1秒待つ
+			continue
+		}
+		status := resp.ServerResponse.HTTPStatusCode
+		if status != 200 {
+			log.Warningf(ctx, "HTTPstatus error. %v. attempt: %d", status, attempt)
+			time.Sleep(1 * time.Second) // 1秒待つ
+			continue
+		}
+		return
 	}
 }
 
@@ -586,13 +607,28 @@ func writeStockprice(srv *sheets.Service, r *http.Request, code string, date str
 			[]interface{}{code, date, stockprice},
 		},
 	}
-	resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
-	if err != nil {
-		log.Errorf(ctx, "Unable to write value. %v", err)
-	}
-	status := resp.ServerResponse.HTTPStatusCode
-	if status != 200 {
-		log.Errorf(ctx, "HTTPstatus error. %v", status)
+	var MaxRetries = 3
+	attempt := 0
+	for {
+		// MaxRetries を超えていたら終了
+		if attempt >= MaxRetries {
+			log.Errorf(ctx, "Failed to retrieve data from sheet. attempt: %d", attempt)
+			return
+		}
+		attempt = attempt + 1
+		resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
+		if err != nil {
+			log.Warningf(ctx, "Unable to write value. %v. attempt: %d", err, attempt)
+			time.Sleep(1 * time.Second) // 1秒待つ
+			continue
+		}
+		status := resp.ServerResponse.HTTPStatusCode
+		if status != 200 {
+			log.Warningf(ctx, "HTTPstatus error. %v. attempt: %d", status, attempt)
+			time.Sleep(1 * time.Second) // 1秒待つ
+			continue
+		}
+		return
 	}
 }
 
@@ -608,23 +644,36 @@ func getSheetData(r *http.Request, srv *sheets.Service, sid string, sname string
 		os.Exit(0)
 	}
 	readRange := sname
-	// stockpriceシートからデータを取得
-	resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
-	if err != nil {
-		log.Errorf(ctx, "Unable to retrieve data from sheet: %v", err)
-	}
-	status := resp.ServerResponse.HTTPStatusCode
-	if status != 200 {
-		log.Errorf(ctx, "HTTPstatus error. %v", status)
-	}
-	v := reflect.ValueOf(resp)
-	log.Debugf(ctx, "type: %v", v.Type())
-	log.Debugf(ctx, resp.Range)
-	log.Debugf(ctx, "len resp.Values: %v", len(resp.Values)) //これでデータの全行数が取れる
 
+	//var resp *sheets.ValueRange
+	//var err error
+	var MaxRetries = 3
+	attempt := 0
+	for {
+		// MaxRetries を超えていたらnilを返す
+		if attempt >= MaxRetries {
+			log.Errorf(ctx, "Failed to retrieve data from sheet. attempt: %d", attempt)
+			return nil
+		}
+		attempt = attempt + 1
+		// stockpriceシートからデータを取得
+		resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
+		if err != nil {
+			log.Warningf(ctx, "Unable to retrieve data from sheet: %v. attempt: %d", err, attempt)
+			time.Sleep(1 * time.Second) // 1秒待つ
+			continue
+		}
+		status := resp.ServerResponse.HTTPStatusCode
+		if status != 200 {
+			log.Warningf(ctx, "HTTPstatus error: %v. attempt: %d", status, attempt)
+			time.Sleep(1 * time.Second) // 1秒待つ
+			continue
+		}
+		return resp.Values
+	}
+	//	log.Debugf(ctx, "type %T", resp)
 	//v1 := resp.Values[0]
 	//log.Debugf(ctx, "v1: %v, v1[0]: %v, v1[1]: %v", v1, v1[0], v1[1])
-	return resp.Values
 }
 
 func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
@@ -661,7 +710,6 @@ func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
 		}
 	}
 	// price ex. [685.1 684.6 683.2 684.2 686.9 684.3 684.3]
-	//log.Println(code, price)
 
 	// rate[0] = price[0]/price[1]
 	// ...
