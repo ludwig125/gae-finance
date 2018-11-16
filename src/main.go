@@ -32,18 +32,6 @@ func start(w http.ResponseWriter, r *http.Request) {
 	log.Infof(c, "STARTING")
 }
 
-// spreadsheets clientを取得
-func getSheetClient(r *http.Request) (*sheets.Service, error) {
-	// googleAPIへのclientをリクエストから作成
-	client := getClientWithJson(r)
-	// spreadsheets clientを取得
-	srv, err := sheets.New(client)
-	if err != nil {
-		return nil, fmt.Errorf("unable to retrieve Sheets Client %v", err)
-	}
-	return srv, nil
-}
-
 func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	// GAE log
 	ctx := appengine.NewContext(r)
@@ -228,6 +216,18 @@ func getClientWithJson(r *http.Request) *http.Client {
 		os.Exit(0)
 	}
 	return conf.Client(ctx)
+}
+
+// spreadsheets clientを取得
+func getSheetClient(r *http.Request) (*sheets.Service, error) {
+	// googleAPIへのclientをリクエストから作成
+	client := getClientWithJson(r)
+	// spreadsheets clientを取得
+	srv, err := sheets.New(client)
+	if err != nil {
+		return nil, fmt.Errorf("unable to retrieve Sheets Client %v", err)
+	}
+	return srv, nil
 }
 
 func isBussinessday(srv *sheets.Service, r *http.Request) bool {
