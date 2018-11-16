@@ -46,6 +46,7 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	sheetService, err := sheets.New(client)
 	if err != nil {
 		log.Errorf(ctx, "Unable to retrieve Sheets Client %v", err)
+		os.Exit(0)
 	}
 
 	// spreadsheetから銘柄コードを取得
@@ -63,24 +64,14 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	if d > 0 {
 		for i := 0; i < d; i++ {
 			partial := codes[MAX*i : MAX*(i+1)]
-			//log.Warningf(ctx, "partial %v, type %T\n", partial, partial)
 			// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
 			processPartialCode(partial, sheetService, r)
-			//err := processPartialCode(partial, sheetService, r)
-			//if err != nil {
-			//	log.Warningf(ctx, "%v\n", err)
-			//}
 		}
 	}
 	if m > 0 {
 		partial := codes[MAX*d:]
 		// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
 		processPartialCode(partial, sheetService, r)
-		//err := processPartialCode(partial, sheetService, r)
-		//if err != nil {
-		//	log.Warningf(ctx, "%v\n", err)
-		//}
-
 	}
 
 }
@@ -112,15 +103,12 @@ func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Reques
 		for _, dp := range p {
 			prices = append(prices, code_price{code, dp})
 		}
-		//log.Infof(ctx, "code: %s, prices: %v", code, prices)
 		time.Sleep(1 * time.Second) // 1秒待つ
 	}
 	if allErrors != "" {
-		//return fmt.Errorf("failed to scrape. code: [%s]", allErrors)
 		// 複数の銘柄で起きたエラーをまとめて出力
 		log.Warningf(ctx, "failed to scrape. code: [%s]\n", allErrors)
 	}
-	//log.Warningf(ctx, "prices. %v", prices)
 	// spreadsheetから株価を取得する
 	resp := getSheetData(r, s, "DAILYPRICE_SHEETID", "daily")
 	if resp == nil {
@@ -159,6 +147,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	sheetService, err := sheets.New(client)
 	if err != nil {
 		log.Errorf(ctx, "Unable to retrieve Sheets Client %v", err)
+		os.Exit(0)
 	}
 
 	if !isBussinessday(sheetService, r) {
@@ -231,10 +220,12 @@ func getClientWithJson(r *http.Request) *http.Client {
 	data, err := ioutil.ReadFile(credentialFilePath)
 	if err != nil {
 		log.Errorf(ctx, "Unable to read client secret file: %v", err)
+		os.Exit(0)
 	}
 	conf, err := google.JWTConfigFromJSON(data, "https://www.googleapis.com/auth/spreadsheets")
 	if err != nil {
 		log.Errorf(ctx, "Unable to parse client secret file to config: %v", err)
+		os.Exit(0)
 	}
 	return conf.Client(ctx)
 }
@@ -294,10 +285,12 @@ func getHolidays(srv *sheets.Service, r *http.Request) [][]interface{} {
 	resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
 	if err != nil {
 		log.Errorf(ctx, "Unable to retrieve data from sheet: %v", err)
+		os.Exit(0)
 	}
 	status := resp.ServerResponse.HTTPStatusCode
 	if status != 200 {
 		log.Errorf(ctx, "HTTPstatus error. %v", status)
+		os.Exit(0)
 	}
 	return resp.Values
 }
@@ -320,10 +313,12 @@ func readCode(srv *sheets.Service, r *http.Request, sheet string) [][]interface{
 	resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
 	if err != nil {
 		log.Errorf(ctx, "Unable to retrieve data from sheet: %v", err)
+		os.Exit(0)
 	}
 	status := resp.ServerResponse.HTTPStatusCode
 	if status != 200 {
 		log.Errorf(ctx, "HTTPstatus error. %v", status)
+		os.Exit(0)
 	}
 	return resp.Values
 }
@@ -353,8 +348,6 @@ func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
 		// 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値を一行ごとに格納
 		date_price = append(date_price, arr)
 	})
-	//ctx := appengine.NewContext(r)
-	//log.Errorf(ctx, "date_price %d", date_price[0])
 	if len(date_price) == 0 {
 		return nil, fmt.Errorf("%s no data", code)
 	}
@@ -375,10 +368,6 @@ func doScrape(r *http.Request, code string) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
-	//v3 := reflect.ValueOf(doc)
-	//ctx := appengine.NewContext(r)
-	//log.Debugf(ctx, "doc type: %v", v3.Type())
-	//log.Debugf(ctx, "doc: %v", doc)
 
 	// time と priceを取得
 	var time, price string
@@ -395,7 +384,6 @@ func doScrape(r *http.Request, code string) (string, string, error) {
 	if err != nil {
 		return "", "", err // 変換できない時は戻る
 	}
-	//return getFormatedDate(time, r), getFormatedPrice(price, r)
 	return d, p, err
 }
 
@@ -516,7 +504,6 @@ func getUniqPrice(r *http.Request, prices []code_price, resp [][]interface{}) []
 
 	var uniqPrices []code_price
 	for _, p := range prices {
-		//log.Debugf(ctx, "code price %s %s", p.Code, p.Price)
 		// codeと日付の組をmapに登録済みのデータと照合
 		cd := fmt.Sprintf("%s %s", p.Code, p.Price[0])
 		if !sheetData[cd] {
@@ -542,8 +529,6 @@ func writeStockpriceDaily(srv *sheets.Service, r *http.Request, prices []code_pr
 	}
 	writeRange := "daily"
 
-	//log.Debugf(ctx, "%s, %s", sheetId, writeRange)
-
 	// spreadsheetに書き込み対象の行列を作成
 	var matrix = make([][]interface{}, 0)
 	for _, p := range prices {
@@ -555,7 +540,6 @@ func writeStockpriceDaily(srv *sheets.Service, r *http.Request, prices []code_pr
 		// ele ex. [8306 8/23 320 322 317 319 8068000 319.0]
 		matrix = append(matrix, ele)
 	}
-	//log.Errorf(ctx, "code prices %v", matrix)
 	valueRange := &sheets.ValueRange{
 		MajorDimension: "ROWS",
 		//matrix : [][]interface{} 型
@@ -645,8 +629,6 @@ func getSheetData(r *http.Request, srv *sheets.Service, sid string, sname string
 	}
 	readRange := sname
 
-	//var resp *sheets.ValueRange
-	//var err error
 	var MaxRetries = 3
 	attempt := 0
 	for {
@@ -671,9 +653,6 @@ func getSheetData(r *http.Request, srv *sheets.Service, sid string, sname string
 		}
 		return resp.Values
 	}
-	//	log.Debugf(ctx, "type %T", resp)
-	//v1 := resp.Values[0]
-	//log.Debugf(ctx, "v1: %v, v1[0]: %v, v1[1]: %v", v1, v1[0], v1[1])
 }
 
 func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
@@ -699,8 +678,6 @@ func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
 			//log.Debugf(ctx, "p: %v", p)
 
 			price = append(price, p)
-			//va := reflect.ValueOf(v[2].(string)) // 型確認
-			//log.Println(va.Type(), v[2])
 
 			count = count - 1
 			// 指定回数分取得したらループを抜ける
@@ -722,7 +699,6 @@ func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
 			rate = append(rate, 0.0)
 		}
 	}
-	//log.Println(code, rate)
 	// rate ex. [1.0007303534910896 1.002781030444965 1.0013154048523822 0.997379531227253 1.0011690778898146 1.0011690778898146]
 	return rate, nil
 }
