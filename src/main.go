@@ -3,10 +3,8 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	//"log"
 	"net/http"
 	"os"
-	//"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -28,6 +26,7 @@ func main() {
 	appengine.Main() // Starts the server to receive requests
 }
 
+// バッチ処理のbasic_scalingを使うために /_ah/startのハンドラが必要
 func start(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
 	log.Infof(c, "STARTING")
@@ -51,11 +50,12 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	// spreadsheetから銘柄コードを取得
 	codes := readCode(sheetService, r, "ichibu")
 
-	//fmt.Fprintln(w, codes)
 	if len(codes) == 0 {
 		log.Infof(ctx, "No target data.")
 		os.Exit(0)
 	}
+
+	// 100件ずつスクレイピングしてSheetに書き込み
 	MAX := 100
 	d := len(codes) / MAX
 	m := len(codes) % MAX
