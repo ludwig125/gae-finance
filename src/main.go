@@ -32,25 +32,31 @@ func start(w http.ResponseWriter, r *http.Request) {
 	log.Infof(c, "STARTING")
 }
 
-// Dailyの株価を取得
-func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
-
+// spreadsheets clientを取得
+func getSheetClient(r *http.Request) (*sheets.Service, error) {
 	// googleAPIへのclientをリクエストから作成
 	client := getClientWithJson(r)
+	// spreadsheets clientを取得
+	srv, err := sheets.New(client)
+	if err != nil {
+		return nil, fmt.Errorf("unable to retrieve Sheets Client %v", err)
+	}
+	return srv, nil
+}
 
+func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	// GAE log
 	ctx := appengine.NewContext(r)
 
-	// spreadsheets clientを取得
-	sheetService, err := sheets.New(client)
+	// spreadsheetのclientを取得
+	sheetService, err := getSheetClient(r)
 	if err != nil {
-		log.Errorf(ctx, "Unable to retrieve Sheets Client %v", err)
+		log.Errorf(ctx, "err: %v", err)
 		os.Exit(0)
 	}
 
 	// spreadsheetから銘柄コードを取得
 	codes := readCode(sheetService, r, "ichibu")
-
 	if len(codes) == 0 {
 		log.Infof(ctx, "No target data.")
 		os.Exit(0)
@@ -137,16 +143,13 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// googleAPIへのclientをリクエストから作成
-	client := getClientWithJson(r)
-
 	// GAE log
 	ctx := appengine.NewContext(r)
 
-	// spreadsheets clientを取得
-	sheetService, err := sheets.New(client)
+	// spreadsheetのclientを取得
+	sheetService, err := getSheetClient(r)
 	if err != nil {
-		log.Errorf(ctx, "Unable to retrieve Sheets Client %v", err)
+		log.Errorf(ctx, "err: %v", err)
 		os.Exit(0)
 	}
 
@@ -157,58 +160,55 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 	// spreadsheetから銘柄コードを取得
 	codes := readCode(sheetService, r, "code")
-
-	//fmt.Fprintln(w, codes)
-
 	if len(codes) == 0 {
 		log.Infof(ctx, "No target data.")
-	} else {
-		for _, row := range codes {
-			code := row[0].(string)
-			// codeごとに株価を取得
-			date, stockprice, err := doScrape(r, code)
-			if err != nil {
-				log.Warningf(ctx, "Failed to scrape hourly price. stockcode: %s, err: %v\n", code, err)
-				continue
-			}
-
-			fmt.Fprintln(w, code, date, stockprice)
-
-			// 株価をspreadsheetに書き込み
-			writeStockprice(sheetService, r, code, date, stockprice)
-
-			time.Sleep(1 * time.Second) // 1秒待つ
-		}
-
-		// spreadsheetから株価を取得する
-		resp := getSheetData(r, sheetService, "STOCKPRICE_SHEETID", "stockprice")
-		if resp == nil {
-			return
-		}
-
-		// 全codeの株価比率
-		var whole_code_rate []code_rate
-		for _, row := range codes {
-			code := row[0].(string)
-			rate, err := calcIncreaseRate(resp, code)
-			if err != nil {
-				log.Warningf(ctx, "%v\n", err)
-				continue
-			}
-			whole_code_rate = append(whole_code_rate, code_rate{code, rate})
-		}
-		log.Infof(ctx, "count whole code %v\n", len(whole_code_rate))
-
-		// 一つ前との比率が一番大きいもの順にソート
-		sort.SliceStable(whole_code_rate, func(i, j int) bool { return whole_code_rate[i].Rate[0] > whole_code_rate[j].Rate[0] })
-		fmt.Fprintln(w, whole_code_rate)
-
-		// 事前にrateのシートをclear
-		clearRate(sheetService, r)
-
-		// 株価の比率順にソートしたものを書き込み
-		writeRate(sheetService, r, whole_code_rate)
 	}
+
+	for _, row := range codes {
+		code := row[0].(string)
+		// codeごとに株価を取得
+		date, stockprice, err := doScrape(r, code)
+		if err != nil {
+			log.Warningf(ctx, "Failed to scrape hourly price. stockcode: %s, err: %v\n", code, err)
+			continue
+		}
+
+		fmt.Fprintln(w, code, date, stockprice)
+
+		// 株価をspreadsheetに書き込み
+		writeStockprice(sheetService, r, code, date, stockprice)
+
+		time.Sleep(1 * time.Second) // 1秒待つ
+	}
+
+	// spreadsheetから株価を取得する
+	resp := getSheetData(r, sheetService, "STOCKPRICE_SHEETID", "stockprice")
+	if resp == nil {
+		return
+	}
+
+	// 全codeの株価比率
+	var whole_code_rate []code_rate
+	for _, row := range codes {
+		code := row[0].(string)
+		rate, err := calcIncreaseRate(resp, code)
+		if err != nil {
+			log.Warningf(ctx, "%v\n", err)
+			continue
+		}
+		whole_code_rate = append(whole_code_rate, code_rate{code, rate})
+	}
+	log.Infof(ctx, "count whole code %v\n", len(whole_code_rate))
+
+	// 一つ前との比率が一番大きいもの順にソート
+	sort.SliceStable(whole_code_rate, func(i, j int) bool { return whole_code_rate[i].Rate[0] > whole_code_rate[j].Rate[0] })
+	fmt.Fprintln(w, whole_code_rate)
+
+	// 事前にrateのシートをclear
+	clearRate(sheetService, r)
+
+	// 株価の比率順にソートしたものを書き込み
+	writeRate(sheetService, r, whole_code_rate)
 }
 
 func getClientWithJson(r *http.Request) *http.Client {
