@@ -162,6 +162,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	codes := readCode(sheetService, r, "code")
 	if len(codes) == 0 {
 		log.Infof(ctx, "No target data.")
+		os.Exit(0)
 	}
 
 	for _, row := range codes {
@@ -205,7 +206,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, whole_code_rate)
 
 	// 事前にrateのシートをclear
-	clearRate(sheetService, r)
+	clearSheet(sheetService, r, "RATE_SHEETID", "rate")
 
 	// 株価の比率順にソートしたものを書き込み
 	writeRate(sheetService, r, whole_code_rate)
@@ -703,18 +704,18 @@ func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
 	return rate, nil
 }
 
-func clearRate(srv *sheets.Service, r *http.Request) {
+func clearSheet(srv *sheets.Service, r *http.Request, sid string, sname string) {
 	ctx := appengine.NewContext(r)
 
 	sheetId := ""
 	// sheetIdを環境変数から読み込む
-	if v := os.Getenv("RATE_SHEETID"); v != "" {
+	if v := os.Getenv(sid); v != "" {
 		sheetId = v
 	} else {
 		log.Errorf(ctx, "Failed to get price rate sheetId. '%v'", v)
 		os.Exit(0)
 	}
-	writeRange := "rate"
+	writeRange := sname
 
 	// clear stockprice rate spreadsheet:
 	resp, err := srv.Spreadsheets.Values.Clear(sheetId, writeRange, &sheets.ClearValuesRequest{}).Do()
