@@ -19,9 +19,22 @@ import (
 	"google.golang.org/appengine/urlfetch" // 外部にhttpするため
 )
 
+// codeごとの株価
+type code_price struct {
+	Code  string
+	Price []string
+}
+
+// codeごとの株価比率
+type code_rate struct {
+	Code string
+	Rate []float64
+}
+
 func main() {
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", indexHandlerDaily)
+	http.HandleFunc("/calc_daily", indexHandlerCalcDaily)
 	http.HandleFunc("/", indexHandler)
 	appengine.Main() // Starts the server to receive requests
 }
@@ -41,6 +54,11 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Errorf(ctx, "err: %v", err)
 		os.Exit(0)
+	}
+
+	if !isBussinessday(sheetService, r) {
+		log.Infof(ctx, "Is not a business day today.")
+		return
 	}
 
 	// spreadsheetから銘柄コードを取得
@@ -68,12 +86,6 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 		processPartialCode(partial, sheetService, r)
 	}
 
-}
-
-// codeごとの株価
-type code_price struct {
-	Code  string
-	Price []string
 }
 
 func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Request) {
@@ -119,10 +131,37 @@ func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Reques
 	return
 }
 
-// codeごとの株価比率
-type code_rate struct {
-	Code string
-	Rate []float64
+func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	// spreadsheetのclientを取得
+	sheetService, err := getSheetClient(r)
+	if err != nil {
+		log.Errorf(ctx, "err: %v", err)
+		os.Exit(0)
+	}
+
+	if !isBussinessday(sheetService, r) {
+		log.Infof(ctx, "Is not a business day today.")
+		return
+	}
+
+	// spreadsheetから銘柄コードを取得
+	codes := readCode(sheetService, r, "ichibu")
+	if len(codes) == 0 {
+		log.Infof(ctx, "No target data.")
+		return
+	}
+
+	// spreadsheetから株価を取得する
+	resp := getSheetData(r, sheetService, "STOCKPRICE_SHEETID", "stockprice")
+	if resp == nil {
+		log.Infof(ctx, "No data")
+		return
+	}
+
+	log.Infof(ctx, "%v\n", resp)
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
@@ -173,6 +212,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	// spreadsheetから株価を取得する
 	resp := getSheetData(r, sheetService, "STOCKPRICE_SHEETID", "stockprice")
 	if resp == nil {
+		log.Infof(ctx, "No data")
 		return
 	}
 
