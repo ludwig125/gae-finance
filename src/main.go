@@ -20,13 +20,13 @@ import (
 )
 
 // codeごとの株価
-type code_price struct {
+type codePrice struct {
 	Code  string
 	Price []string
 }
 
 // codeごとの株価比率
-type code_rate struct {
+type codeRate struct {
 	Code string
 	Rate []float64
 }
@@ -91,7 +91,7 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Request) {
 	ctx := appengine.NewContext(r)
 
-	var prices []code_price
+	var prices []codePrice
 
 	var allErrors string
 	for _, v := range codes {
@@ -107,7 +107,7 @@ func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Reques
 		}
 		// code, 株価の単位でpricesに格納
 		for _, dp := range p {
-			prices = append(prices, code_price{code, dp})
+			prices = append(prices, codePrice{code, dp})
 		}
 		time.Sleep(1 * time.Second) // 1秒待つ
 	}
@@ -155,13 +155,30 @@ func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// spreadsheetから株価を取得する
-	resp := getSheetData(r, sheetService, "STOCKPRICE_SHEETID", "stockprice")
+	resp := getSheetData(r, sheetService, "DAILYPRICE_SHEETID", "daily")
 	if resp == nil {
 		log.Infof(ctx, "No data")
 		return
 	}
 
-	log.Infof(ctx, "%v\n", resp)
+	//	log.Infof(ctx, "%v\n", resp[0])
+	codeDateModprice(r, resp)
+}
+
+func codeDateModprice(r *http.Request, resp [][]interface{}) {
+	ctx := appengine.NewContext(r)
+	matrix := make([][]interface{}, 0)
+	for _, v := range resp {
+		//log.Infof(ctx, "%v %v %v\n", v[0], v[1], v[len(v)-1])
+		cdmp := []interface{}{
+			interface{}(v[0]),
+			interface{}(v[1]),
+			interface{}(v[len(v)-1]),
+		}
+		matrix = append(matrix, cdmp)
+	}
+	log.Infof(ctx, "%v\n", matrix)
+
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +234,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 全codeの株価比率
-	var whole_code_rate []code_rate
+	var whole_codeRate []codeRate
 	for _, row := range codes {
 		code := row[0].(string)
 		rate, err := calcIncreaseRate(resp, code)
@@ -225,19 +242,19 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 			log.Warningf(ctx, "%v\n", err)
 			continue
 		}
-		whole_code_rate = append(whole_code_rate, code_rate{code, rate})
+		whole_codeRate = append(whole_codeRate, codeRate{code, rate})
 	}
-	log.Infof(ctx, "count whole code %v\n", len(whole_code_rate))
+	log.Infof(ctx, "count whole code %v\n", len(whole_codeRate))
 
 	// 一つ前との比率が一番大きいもの順にソート
-	sort.SliceStable(whole_code_rate, func(i, j int) bool { return whole_code_rate[i].Rate[0] > whole_code_rate[j].Rate[0] })
-	fmt.Fprintln(w, whole_code_rate)
+	sort.SliceStable(whole_codeRate, func(i, j int) bool { return whole_codeRate[i].Rate[0] > whole_codeRate[j].Rate[0] })
+	fmt.Fprintln(w, whole_codeRate)
 
 	// 事前にrateのシートをclear
 	clearSheet(sheetService, r, "RATE_SHEETID", "rate")
 
 	// 株価の比率順にソートしたものを書き込み
-	writeRate(sheetService, r, whole_code_rate)
+	writeRate(sheetService, r, whole_codeRate)
 }
 
 func getClientWithJson(r *http.Request) *http.Client {
@@ -532,7 +549,7 @@ func getFormatedPrice(s string) (string, error) {
 	return price, nil
 }
 
-func getUniqPrice(r *http.Request, prices []code_price, resp [][]interface{}) []code_price {
+func getUniqPrice(r *http.Request, prices []codePrice, resp [][]interface{}) []codePrice {
 	ctx := appengine.NewContext(r)
 
 	sheetData := map[string]bool{}
@@ -543,12 +560,12 @@ func getUniqPrice(r *http.Request, prices []code_price, resp [][]interface{}) []
 		//log.Errorf(ctx, "code date %v", d)
 	}
 
-	var uniqPrices []code_price
+	var uniqPrices []codePrice
 	for _, p := range prices {
 		// codeと日付の組をmapに登録済みのデータと照合
 		cd := fmt.Sprintf("%s %s", p.Code, p.Price[0])
 		if !sheetData[cd] {
-			uniqPrices = append(uniqPrices, code_price{p.Code, p.Price})
+			uniqPrices = append(uniqPrices, codePrice{p.Code, p.Price})
 			//log.Debugf(ctx, "uniq code price %s %v", p.Code, p.Price)
 		} else {
 			log.Debugf(ctx, "duplicated code price %s %v", p.Code, p.Price)
@@ -557,7 +574,7 @@ func getUniqPrice(r *http.Request, prices []code_price, resp [][]interface{}) []
 	return uniqPrices
 }
 
-func writeStockpriceDaily(srv *sheets.Service, r *http.Request, prices []code_price) {
+func writeStockpriceDaily(srv *sheets.Service, r *http.Request, prices []codePrice) {
 	ctx := appengine.NewContext(r)
 
 	sheetId := ""
@@ -703,12 +720,12 @@ func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
 	DATA_NUM := 7
 
 	var price []float64
-	// 後ろから順番に読んでいく
+	// 最新のデータから順番に読んでいく
 	count := DATA_NUM
 	for i := 0; i < len(resp); i++ {
 		v := resp[len(resp)-1-i] // [8316 2018/08/09 15:00 4426]
 		//		log.Debugf(ctx, "v: %v, v[0]: %v, v[1]: %v", v, v[0], v[1])
-		if len(v) < 3 {
+		if len(v) < 3 { // 銘柄, 日付, 株価の3要素が必要
 			return nil, fmt.Errorf("code %s record is unsatisfied. record: %v", code, v)
 		}
 		if v[0] == code {
@@ -768,7 +785,7 @@ func clearSheet(srv *sheets.Service, r *http.Request, sid string, sname string) 
 	}
 }
 
-func writeRate(srv *sheets.Service, r *http.Request, rate []code_rate) {
+func writeRate(srv *sheets.Service, r *http.Request, rate []codeRate) {
 	ctx := appengine.NewContext(r)
 
 	sheetId := ""
