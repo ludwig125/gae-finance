@@ -161,24 +161,24 @@ func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//	log.Infof(ctx, "%v\n", resp[0])
-	codeDateModprice(r, resp)
+	cdmp := codeDateModprice(r, resp)
+	log.Infof(ctx, "%v\n", cdmp)
 }
 
-func codeDateModprice(r *http.Request, resp [][]interface{}) {
-	ctx := appengine.NewContext(r)
+func codeDateModprice(r *http.Request, resp [][]interface{}) [][]interface{} {
+	//ctx := appengine.NewContext(r)
 	matrix := make([][]interface{}, 0)
 	for _, v := range resp {
 		//log.Infof(ctx, "%v %v %v\n", v[0], v[1], v[len(v)-1])
 		cdmp := []interface{}{
-			interface{}(v[0]),
-			interface{}(v[1]),
-			interface{}(v[len(v)-1]),
+			interface{}(v[0]),        // 銘柄
+			interface{}(v[1]),        // 日付
+			interface{}(v[len(v)-1]), // 調整後終値
 		}
 		matrix = append(matrix, cdmp)
 	}
-	log.Infof(ctx, "%v\n", matrix)
-
+	//log.Infof(ctx, "%v\n", matrix)
+	return matrix
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
