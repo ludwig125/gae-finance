@@ -163,6 +163,30 @@ func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
 
 	cdmp := codeDateModprice(r, resp)
 	log.Infof(ctx, "%v\n", cdmp)
+
+	// 全codeの株価比率
+	var whole_codeRate []codeRate
+	for _, row := range codes {
+		code := row[0].(string)
+		//直近7日間の増減率を取得する
+		rate, err := calcIncreaseRate(cdmp, code, 7, r)
+		if err != nil {
+			log.Warningf(ctx, "%v\n", err)
+			continue
+		}
+		whole_codeRate = append(whole_codeRate, codeRate{code, rate})
+	}
+	log.Infof(ctx, "count whole code %v\n", len(whole_codeRate))
+
+	// 一つ前との比率が一番大きいもの順にソート
+	sort.SliceStable(whole_codeRate, func(i, j int) bool { return whole_codeRate[i].Rate[0] > whole_codeRate[j].Rate[0] })
+	fmt.Fprintln(w, whole_codeRate)
+
+	// 事前にrateのシートをclear
+	clearSheet(sheetService, r, "RATE_SHEETID", "daily_rate")
+
+	// 株価の比率順にソートしたものを書き込み
+	writeRate(sheetService, r, whole_codeRate, "RATE_SHEETID", "daily_rate")
 }
 
 func codeDateModprice(r *http.Request, resp [][]interface{}) [][]interface{} {
@@ -208,7 +232,6 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		log.Infof(ctx, "No target data.")
 		os.Exit(0)
 	}
-
 	for _, row := range codes {
 		code := row[0].(string)
 		// codeごとに株価を取得
@@ -225,7 +248,6 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 		time.Sleep(1 * time.Second) // 1秒待つ
 	}
-
 	// spreadsheetから株価を取得する
 	resp := getSheetData(r, sheetService, "STOCKPRICE_SHEETID", "stockprice")
 	if resp == nil {
@@ -237,7 +259,8 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	var whole_codeRate []codeRate
 	for _, row := range codes {
 		code := row[0].(string)
-		rate, err := calcIncreaseRate(resp, code)
+		//直近7時間の増減率を取得する
+		rate, err := calcIncreaseRate(resp, code, 7, r)
 		if err != nil {
 			log.Warningf(ctx, "%v\n", err)
 			continue
@@ -254,7 +277,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	clearSheet(sheetService, r, "RATE_SHEETID", "rate")
 
 	// 株価の比率順にソートしたものを書き込み
-	writeRate(sheetService, r, whole_codeRate)
+	writeRate(sheetService, r, whole_codeRate, "RATE_SHEETID", "rate")
 }
 
 func getClientWithJson(r *http.Request) *http.Client {
@@ -713,15 +736,15 @@ func getSheetData(r *http.Request, srv *sheets.Service, sid string, sname string
 	}
 }
 
-func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
+func calcIncreaseRate(resp [][]interface{}, code string, num int, r *http.Request) ([]float64, error) {
+	ctx := appengine.NewContext(r)
 
-	//v2 := resp[0]
-	//log.Debugf(ctx, "v2: %v, v2[0]: %v, v2[1]: %v, v2[2]: %v", v2, v2[0], v2[1], v2[2])
-	DATA_NUM := 7
+	// 直近のnum分の株価の変動率を計算する
 
 	var price []float64
 	// 最新のデータから順番に読んでいく
-	count := DATA_NUM
+	// 読み込むデータは一番下の行が最新で日付順に並んでいることが前提
+	count := num
 	for i := 0; i < len(resp); i++ {
 		v := resp[len(resp)-1-i] // [8316 2018/08/09 15:00 4426]
 		//		log.Debugf(ctx, "v: %v, v[0]: %v, v[1]: %v", v, v[0], v[1])
@@ -733,7 +756,7 @@ func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
 			if err != nil {
 				return nil, fmt.Errorf("code %s's price cannot be converted to ParseFloat. record: %v. err: %v", code, v, err)
 			}
-			//log.Debugf(ctx, "p: %v", p)
+			log.Debugf(ctx, "code: %s, date: %v, p: %v", code, v[1], p)
 
 			price = append(price, p)
 
@@ -748,9 +771,9 @@ func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
 
 	// rate[0] = price[0]/price[1]
 	// ...
-	// rate[DATA_NUM-2] = price[DATA_NUM-2]/price[DATA_NUM-1]
+	// rate[num-2] = price[num-2]/price[num-1]
 	var rate []float64
-	for i := 0; i < DATA_NUM-1; i++ {
+	for i := 0; i < num-1; i++ {
 		if i+1 < len(price) {
 			rate = append(rate, price[0]/price[i+1])
 		} else {
@@ -785,24 +808,33 @@ func clearSheet(srv *sheets.Service, r *http.Request, sid string, sname string) 
 	}
 }
 
-func writeRate(srv *sheets.Service, r *http.Request, rate []codeRate) {
+func writeRate(srv *sheets.Service, r *http.Request, rate []codeRate, sid string, sname string) {
 	ctx := appengine.NewContext(r)
 
 	sheetId := ""
 	// sheetIdを環境変数から読み込む
-	if v := os.Getenv("RATE_SHEETID"); v != "" {
+	if v := os.Getenv(sid); v != "" {
 		sheetId = v
 	} else {
 		log.Errorf(ctx, "Failed to get price rate sheetId. '%v'", v)
 		os.Exit(0)
 	}
-	writeRange := "rate"
+	writeRange := sname
 
 	// spreadsheetに書き込み対象の行列を作成
 	matrix := make([][]interface{}, len(rate))
 	// 株価の比率順にソートしたものを書き込み
-	for i, r := range rate {
-		matrix[i] = []interface{}{r.Code, r.Rate[0], r.Rate[1], r.Rate[2], r.Rate[3], r.Rate[4], r.Rate[5]}
+	//for i, r := range rate {
+	//matrix[i] = []interface{}{r.Code, r.Rate[0], r.Rate[1], r.Rate[2], r.Rate[3], r.Rate[4], r.Rate[5]}
+	//}
+	for _, r := range rate {
+		m := make([]interface{}, 0)
+		m = append(m, r.Code)
+		// Rateの個数だけ書き込み
+		for i := 0; i < len(r.Rate); i++ {
+			m = append(m, r.Rate[i])
+		}
+		matrix = append(matrix, m)
 	}
 
 	valueRange := &sheets.ValueRange{

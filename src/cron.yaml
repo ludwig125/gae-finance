@@ -7,3 +7,7 @@ cron:
   url: /daily
   schedule: every day 02:00
   timezone: Asia/Tokyo
+- description: "calculate stockprice daily rate"
+  url: /calc_daily
+  schedule: every day 04:00
+  timezone: Asia/Tokyo
