@@ -19,9 +19,22 @@ import (
 	"google.golang.org/appengine/urlfetch" // 外部にhttpするため
 )
 
+// codeごとの株価
+type codePrice struct {
+	Code  string
+	Price []string
+}
+
+// codeごとの株価比率
+type codeRate struct {
+	Code string
+	Rate []float64
+}
+
 func main() {
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", indexHandlerDaily)
+	http.HandleFunc("/calc_daily", indexHandlerCalcDaily)
 	http.HandleFunc("/", indexHandler)
 	appengine.Main() // Starts the server to receive requests
 }
@@ -41,6 +54,11 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Errorf(ctx, "err: %v", err)
 		os.Exit(0)
+	}
+
+	if !isBussinessday(sheetService, r) {
+		log.Infof(ctx, "Is not a business day today.")
+		return
 	}
 
 	// spreadsheetから銘柄コードを取得
@@ -70,16 +88,10 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 
 }
 
-// codeごとの株価
-type code_price struct {
-	Code  string
-	Price []string
-}
-
 func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Request) {
 	ctx := appengine.NewContext(r)
 
-	var prices []code_price
+	var prices []codePrice
 
 	var allErrors string
 	for _, v := range codes {
@@ -95,7 +107,7 @@ func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Reques
 		}
 		// code, 株価の単位でpricesに格納
 		for _, dp := range p {
-			prices = append(prices, code_price{code, dp})
+			prices = append(prices, codePrice{code, dp})
 		}
 		time.Sleep(1 * time.Second) // 1秒待つ
 	}
@@ -119,10 +131,78 @@ func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Reques
 	return
 }
 
-// codeごとの株価比率
-type code_rate struct {
-	Code string
-	Rate []float64
+func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	// spreadsheetのclientを取得
+	sheetService, err := getSheetClient(r)
+	if err != nil {
+		log.Errorf(ctx, "err: %v", err)
+		os.Exit(0)
+	}
+
+	if !isBussinessday(sheetService, r) {
+		log.Infof(ctx, "Is not a business day today.")
+		return
+	}
+
+	// spreadsheetから銘柄コードを取得
+	codes := readCode(sheetService, r, "ichibu")
+	if len(codes) == 0 {
+		log.Infof(ctx, "No target data.")
+		return
+	}
+
+	// spreadsheetから株価を取得する
+	resp := getSheetData(r, sheetService, "DAILYPRICE_SHEETID", "daily")
+	if resp == nil {
+		log.Infof(ctx, "No data")
+		return
+	}
+
+	cdmp := codeDateModprice(r, resp)
+	//log.Infof(ctx, "%v\n", cdmp)
+
+	// 全codeの株価比率
+	var whole_codeRate []codeRate
+	for _, row := range codes {
+		code := row[0].(string)
+		//直近7日間の増減率を取得する
+		rate, err := calcIncreaseRate(cdmp, code, 7, r)
+		if err != nil {
+			log.Warningf(ctx, "%v\n", err)
+			continue
+		}
+		whole_codeRate = append(whole_codeRate, codeRate{code, rate})
+	}
+	log.Infof(ctx, "count whole code %v\n", len(whole_codeRate))
+
+	// 一つ前との比率が一番大きいもの順にソート
+	sort.SliceStable(whole_codeRate, func(i, j int) bool { return whole_codeRate[i].Rate[0] > whole_codeRate[j].Rate[0] })
+	//fmt.Fprintln(w, whole_codeRate)
+
+	// 事前にrateのシートをclear
+	clearSheet(sheetService, r, "DAILYRATE_SHEETID", "daily_rate")
+
+	// 株価の比率順にソートしたものを書き込み
+	writeRate(sheetService, r, whole_codeRate, "DAILYRATE_SHEETID", "daily_rate")
+}
+
+func codeDateModprice(r *http.Request, resp [][]interface{}) [][]interface{} {
+	//ctx := appengine.NewContext(r)
+	matrix := make([][]interface{}, 0)
+	for _, v := range resp {
+		//log.Infof(ctx, "%v %v %v\n", v[0], v[1], v[len(v)-1])
+		cdmp := []interface{}{
+			interface{}(v[0]),        // 銘柄
+			interface{}(v[1]),        // 日付
+			interface{}(v[len(v)-1]), // 調整後終値
+		}
+		matrix = append(matrix, cdmp)
+	}
+	//log.Infof(ctx, "%v\n", matrix)
+	return matrix
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +232,6 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		log.Infof(ctx, "No target data.")
 		os.Exit(0)
 	}
-
 	for _, row := range codes {
 		code := row[0].(string)
 		// codeごとに株価を取得
@@ -169,35 +248,36 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 		time.Sleep(1 * time.Second) // 1秒待つ
 	}
-
 	// spreadsheetから株価を取得する
 	resp := getSheetData(r, sheetService, "STOCKPRICE_SHEETID", "stockprice")
 	if resp == nil {
+		log.Infof(ctx, "No data")
 		return
 	}
 
 	// 全codeの株価比率
-	var whole_code_rate []code_rate
+	var whole_codeRate []codeRate
 	for _, row := range codes {
 		code := row[0].(string)
-		rate, err := calcIncreaseRate(resp, code)
+		//直近7時間の増減率を取得する
+		rate, err := calcIncreaseRate(resp, code, 7, r)
 		if err != nil {
 			log.Warningf(ctx, "%v\n", err)
 			continue
 		}
-		whole_code_rate = append(whole_code_rate, code_rate{code, rate})
+		whole_codeRate = append(whole_codeRate, codeRate{code, rate})
 	}
-	log.Infof(ctx, "count whole code %v\n", len(whole_code_rate))
+	log.Infof(ctx, "count whole code %v\n", len(whole_codeRate))
 
 	// 一つ前との比率が一番大きいもの順にソート
-	sort.SliceStable(whole_code_rate, func(i, j int) bool { return whole_code_rate[i].Rate[0] > whole_code_rate[j].Rate[0] })
-	fmt.Fprintln(w, whole_code_rate)
+	sort.SliceStable(whole_codeRate, func(i, j int) bool { return whole_codeRate[i].Rate[0] > whole_codeRate[j].Rate[0] })
+	fmt.Fprintln(w, whole_codeRate)
 
 	// 事前にrateのシートをclear
 	clearSheet(sheetService, r, "RATE_SHEETID", "rate")
 
 	// 株価の比率順にソートしたものを書き込み
-	writeRate(sheetService, r, whole_code_rate)
+	writeRate(sheetService, r, whole_codeRate, "RATE_SHEETID", "rate")
 }
 
 func getClientWithJson(r *http.Request) *http.Client {
@@ -492,7 +572,7 @@ func getFormatedPrice(s string) (string, error) {
 	return price, nil
 }
 
-func getUniqPrice(r *http.Request, prices []code_price, resp [][]interface{}) []code_price {
+func getUniqPrice(r *http.Request, prices []codePrice, resp [][]interface{}) []codePrice {
 	ctx := appengine.NewContext(r)
 
 	sheetData := map[string]bool{}
@@ -503,12 +583,12 @@ func getUniqPrice(r *http.Request, prices []code_price, resp [][]interface{}) []
 		//log.Errorf(ctx, "code date %v", d)
 	}
 
-	var uniqPrices []code_price
+	var uniqPrices []codePrice
 	for _, p := range prices {
 		// codeと日付の組をmapに登録済みのデータと照合
 		cd := fmt.Sprintf("%s %s", p.Code, p.Price[0])
 		if !sheetData[cd] {
-			uniqPrices = append(uniqPrices, code_price{p.Code, p.Price})
+			uniqPrices = append(uniqPrices, codePrice{p.Code, p.Price})
 			//log.Debugf(ctx, "uniq code price %s %v", p.Code, p.Price)
 		} else {
 			log.Debugf(ctx, "duplicated code price %s %v", p.Code, p.Price)
@@ -517,7 +597,7 @@ func getUniqPrice(r *http.Request, prices []code_price, resp [][]interface{}) []
 	return uniqPrices
 }
 
-func writeStockpriceDaily(srv *sheets.Service, r *http.Request, prices []code_price) {
+func writeStockpriceDaily(srv *sheets.Service, r *http.Request, prices []codePrice) {
 	ctx := appengine.NewContext(r)
 
 	sheetId := ""
@@ -656,19 +736,20 @@ func getSheetData(r *http.Request, srv *sheets.Service, sid string, sname string
 	}
 }
 
-func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
+func calcIncreaseRate(resp [][]interface{}, code string, num int, r *http.Request) ([]float64, error) {
+	ctx := appengine.NewContext(r)
 
-	//v2 := resp[0]
-	//log.Debugf(ctx, "v2: %v, v2[0]: %v, v2[1]: %v, v2[2]: %v", v2, v2[0], v2[1], v2[2])
-	DATA_NUM := 7
+	// 直近のnum分の株価の変動率を計算する
 
+	log.Debugf(ctx, "code: %s", code)
 	var price []float64
-	// 後ろから順番に読んでいく
-	count := DATA_NUM
+	// 最新のデータから順番に読んでいく
+	// 読み込むデータは一番下の行が最新で日付順に並んでいることが前提
+	count := num
 	for i := 0; i < len(resp); i++ {
 		v := resp[len(resp)-1-i] // [8316 2018/08/09 15:00 4426]
 		//		log.Debugf(ctx, "v: %v, v[0]: %v, v[1]: %v", v, v[0], v[1])
-		if len(v) < 3 {
+		if len(v) < 3 { // 銘柄, 日付, 株価の3要素が必要
 			return nil, fmt.Errorf("code %s record is unsatisfied. record: %v", code, v)
 		}
 		if v[0] == code {
@@ -676,7 +757,7 @@ func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
 			if err != nil {
 				return nil, fmt.Errorf("code %s's price cannot be converted to ParseFloat. record: %v. err: %v", code, v, err)
 			}
-			//log.Debugf(ctx, "p: %v", p)
+			//log.Debugf(ctx, "code: %s, date: %v, p: %v", code, v[1], p)
 
 			price = append(price, p)
 
@@ -691,9 +772,9 @@ func calcIncreaseRate(resp [][]interface{}, code string) ([]float64, error) {
 
 	// rate[0] = price[0]/price[1]
 	// ...
-	// rate[DATA_NUM-2] = price[DATA_NUM-2]/price[DATA_NUM-1]
+	// rate[num-2] = price[num-2]/price[num-1]
 	var rate []float64
-	for i := 0; i < DATA_NUM-1; i++ {
+	for i := 0; i < num-1; i++ {
 		if i+1 < len(price) {
 			rate = append(rate, price[0]/price[i+1])
 		} else {
@@ -721,31 +802,42 @@ func clearSheet(srv *sheets.Service, r *http.Request, sid string, sname string) 
 	resp, err := srv.Spreadsheets.Values.Clear(sheetId, writeRange, &sheets.ClearValuesRequest{}).Do()
 	if err != nil {
 		log.Errorf(ctx, "Unable to clear value. %v", err)
+		return
 	}
 	status := resp.ServerResponse.HTTPStatusCode
 	if status != 200 {
 		log.Errorf(ctx, "HTTPstatus error. %v", status)
+		return
 	}
 }
 
-func writeRate(srv *sheets.Service, r *http.Request, rate []code_rate) {
+func writeRate(srv *sheets.Service, r *http.Request, rate []codeRate, sid string, sname string) {
 	ctx := appengine.NewContext(r)
 
 	sheetId := ""
 	// sheetIdを環境変数から読み込む
-	if v := os.Getenv("RATE_SHEETID"); v != "" {
+	if v := os.Getenv(sid); v != "" {
 		sheetId = v
 	} else {
 		log.Errorf(ctx, "Failed to get price rate sheetId. '%v'", v)
 		os.Exit(0)
 	}
-	writeRange := "rate"
+	writeRange := sname
 
 	// spreadsheetに書き込み対象の行列を作成
 	matrix := make([][]interface{}, len(rate))
 	// 株価の比率順にソートしたものを書き込み
-	for i, r := range rate {
-		matrix[i] = []interface{}{r.Code, r.Rate[0], r.Rate[1], r.Rate[2], r.Rate[3], r.Rate[4], r.Rate[5]}
+	//for i, r := range rate {
+	//matrix[i] = []interface{}{r.Code, r.Rate[0], r.Rate[1], r.Rate[2], r.Rate[3], r.Rate[4], r.Rate[5]}
+	//}
+	for _, r := range rate {
+		m := make([]interface{}, 0)
+		m = append(m, r.Code)
+		// Rateの個数だけ書き込み
+		for i := 0; i < len(r.Rate); i++ {
+			m = append(m, r.Rate[i])
+		}
+		matrix = append(matrix, m)
 	}
 
 	valueRange := &sheets.ValueRange{
@@ -756,9 +848,11 @@ func writeRate(srv *sheets.Service, r *http.Request, rate []code_rate) {
 	resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
 	if err != nil {
 		log.Errorf(ctx, "Unable to write value. %v", err)
+		return
 	}
 	status := resp.ServerResponse.HTTPStatusCode
 	if status != 200 {
 		log.Errorf(ctx, "HTTPstatus error. %v", status)
+		return
 	}
 }
