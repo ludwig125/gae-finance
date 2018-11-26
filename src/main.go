@@ -162,7 +162,7 @@ func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cdmp := codeDateModprice(r, resp)
-	log.Infof(ctx, "%v\n", cdmp)
+	//log.Infof(ctx, "%v\n", cdmp)
 
 	// 全codeの株価比率
 	var whole_codeRate []codeRate
@@ -180,13 +180,13 @@ func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
 
 	// 一つ前との比率が一番大きいもの順にソート
 	sort.SliceStable(whole_codeRate, func(i, j int) bool { return whole_codeRate[i].Rate[0] > whole_codeRate[j].Rate[0] })
-	fmt.Fprintln(w, whole_codeRate)
+	//fmt.Fprintln(w, whole_codeRate)
 
 	// 事前にrateのシートをclear
-	clearSheet(sheetService, r, "RATE_SHEETID", "daily_rate")
+	clearSheet(sheetService, r, "DAILYRATE_SHEETID", "daily_rate")
 
 	// 株価の比率順にソートしたものを書き込み
-	writeRate(sheetService, r, whole_codeRate, "RATE_SHEETID", "daily_rate")
+	writeRate(sheetService, r, whole_codeRate, "DAILYRATE_SHEETID", "daily_rate")
 }
 
 func codeDateModprice(r *http.Request, resp [][]interface{}) [][]interface{} {
@@ -741,6 +741,7 @@ func calcIncreaseRate(resp [][]interface{}, code string, num int, r *http.Reques
 
 	// 直近のnum分の株価の変動率を計算する
 
+	log.Debugf(ctx, "code: %s", code)
 	var price []float64
 	// 最新のデータから順番に読んでいく
 	// 読み込むデータは一番下の行が最新で日付順に並んでいることが前提
@@ -756,7 +757,7 @@ func calcIncreaseRate(resp [][]interface{}, code string, num int, r *http.Reques
 			if err != nil {
 				return nil, fmt.Errorf("code %s's price cannot be converted to ParseFloat. record: %v. err: %v", code, v, err)
 			}
-			log.Debugf(ctx, "code: %s, date: %v, p: %v", code, v[1], p)
+			//log.Debugf(ctx, "code: %s, date: %v, p: %v", code, v[1], p)
 
 			price = append(price, p)
 
@@ -801,10 +802,12 @@ func clearSheet(srv *sheets.Service, r *http.Request, sid string, sname string) 
 	resp, err := srv.Spreadsheets.Values.Clear(sheetId, writeRange, &sheets.ClearValuesRequest{}).Do()
 	if err != nil {
 		log.Errorf(ctx, "Unable to clear value. %v", err)
+		return
 	}
 	status := resp.ServerResponse.HTTPStatusCode
 	if status != 200 {
 		log.Errorf(ctx, "HTTPstatus error. %v", status)
+		return
 	}
 }
 
@@ -845,9 +848,11 @@ func writeRate(srv *sheets.Service, r *http.Request, rate []codeRate, sid string
 	resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
 	if err != nil {
 		log.Errorf(ctx, "Unable to write value. %v", err)
+		return
 	}
 	status := resp.ServerResponse.HTTPStatusCode
 	if status != 200 {
 		log.Errorf(ctx, "HTTPstatus error. %v", status)
+		return
 	}
 }
