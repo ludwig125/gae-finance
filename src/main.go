@@ -68,6 +68,15 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 		os.Exit(0)
 	}
 
+	// 重複書き込みをしないように既存のデータに目印をつける
+	resp := getSheetData(r, sheetService, "DAILYPRICE_SHEETID", "daily")
+	existData := map[string]bool{}
+	for _, v := range resp {
+		// codeと日付の組をmapに登録
+		cd := fmt.Sprintf("%s %s", v[0], v[1])
+		existData[cd] = true
+	}
+
 	// 100件ずつスクレイピングしてSheetに書き込み
 	MAX := 100
 	d := len(codes) / MAX
@@ -76,19 +85,29 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	if d > 0 {
 		for i := 0; i < d; i++ {
 			partial := codes[MAX*i : MAX*(i+1)]
-			// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
-			processPartialCode(partial, sheetService, r)
+			scrapeAndWrite(r, partial, sheetService, existData)
 		}
 	}
 	if m > 0 {
 		partial := codes[MAX*d:]
-		// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
-		processPartialCode(partial, sheetService, r)
+		scrapeAndWrite(r, partial, sheetService, existData)
 	}
 
 }
 
-func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Request) {
+func scrapeAndWrite(r *http.Request, codes [][]interface{}, s *sheets.Service, existData map[string]bool) {
+	// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
+	prices := getEachCodesPrices(r, codes)
+	// シートに存在しないものだけを抽出
+	uniqPrices := getUniqPrice(r, prices, existData)
+	// すでにシートに存在するデータは書き込まない
+	if uniqPrices != nil {
+		writeStockpriceDaily(r, s, uniqPrices)
+	}
+}
+
+// 複数銘柄についてそれぞれの株価を取得する
+func getEachCodesPrices(r *http.Request, codes [][]interface{}) []codePrice {
 	ctx := appengine.NewContext(r)
 
 	var prices []codePrice
@@ -115,20 +134,7 @@ func processPartialCode(codes [][]interface{}, s *sheets.Service, r *http.Reques
 		// 複数の銘柄で起きたエラーをまとめて出力
 		log.Warningf(ctx, "failed to scrape. code: [%s]\n", allErrors)
 	}
-	// spreadsheetから株価を取得する
-	resp := getSheetData(r, s, "DAILYPRICE_SHEETID", "daily")
-	if resp == nil {
-		return
-	}
-
-	// シートに存在しないものだけを抽出
-	uniqPrices := getUniqPrice(r, prices, resp)
-	// すでにシートに存在するデータは書き込まない
-	if uniqPrices != nil {
-		writeStockpriceDaily(s, r, uniqPrices)
-	}
-
-	return
+	return prices
 }
 
 func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
@@ -572,22 +578,15 @@ func getFormatedPrice(s string) (string, error) {
 	return price, nil
 }
 
-func getUniqPrice(r *http.Request, prices []codePrice, resp [][]interface{}) []codePrice {
+func getUniqPrice(r *http.Request, prices []codePrice, existData map[string]bool) []codePrice {
 	ctx := appengine.NewContext(r)
-
-	sheetData := map[string]bool{}
-	for _, v := range resp {
-		// codeと日付の組をmapに登録
-		cd := fmt.Sprintf("%s %s", v[0], v[1])
-		sheetData[cd] = true
-		//log.Errorf(ctx, "code date %v", d)
-	}
 
 	var uniqPrices []codePrice
 	for _, p := range prices {
 		// codeと日付の組をmapに登録済みのデータと照合
 		cd := fmt.Sprintf("%s %s", p.Code, p.Price[0])
-		if !sheetData[cd] {
+		//if !sheetData[cd] {
+		if !existData[cd] {
 			uniqPrices = append(uniqPrices, codePrice{p.Code, p.Price})
 			//log.Debugf(ctx, "uniq code price %s %v", p.Code, p.Price)
 		} else {
@@ -597,7 +596,7 @@ func getUniqPrice(r *http.Request, prices []codePrice, resp [][]interface{}) []c
 	return uniqPrices
 }
 
-func writeStockpriceDaily(srv *sheets.Service, r *http.Request, prices []codePrice) {
+func writeStockpriceDaily(r *http.Request, srv *sheets.Service, prices []codePrice) {
 	ctx := appengine.NewContext(r)
 
 	sheetId := ""
