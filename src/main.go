@@ -49,6 +49,9 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	// GAE log
 	ctx := appengine.NewContext(r)
 
+	// read environment values
+	getEnv(r)
+
 	// spreadsheetのclientを取得
 	sheetService, err := getSheetClient(r)
 	if err != nil {
@@ -141,6 +144,9 @@ func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
 	// GAE log
 	ctx := appengine.NewContext(r)
 
+	// read environment values
+	getEnv(r)
+
 	// spreadsheetのclientを取得
 	sheetService, err := getSheetClient(r)
 	if err != nil {
@@ -219,6 +225,9 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 	// GAE log
 	ctx := appengine.NewContext(r)
+
+	// read environment values
+	getEnv(r)
 
 	// spreadsheetのclientを取得
 	sheetService, err := getSheetClient(r)
@@ -305,6 +314,65 @@ func getClientWithJson(r *http.Request) *http.Client {
 	return conf.Client(ctx)
 }
 
+var (
+	CODE_SHEETID       string
+	DAILYPRICE_SHEETID string
+	ENV                string
+	HOLIDAY_SHEETID    string
+	STOCKPRICE_SHEETID string
+)
+
+func getEnv(r *http.Request) {
+	ctx := appengine.NewContext(r)
+	// sheetIdを環境変数から読み込む
+
+	// CODE_SHEETID
+	if v := os.Getenv("CODE_SHEETID"); v != "" {
+		CODE_SHEETID = v
+	} else {
+		log.Errorf(ctx, "Failed to get codes sheetId. '%v'", v)
+		os.Exit(0)
+	}
+
+	// DAILYPRICE_SHEETID
+	if v := os.Getenv("DAILYPRICE_SHEETID"); v != "" {
+		DAILYPRICE_SHEETID = v
+	} else {
+		log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
+		os.Exit(0)
+	}
+
+	// ENV
+	if v := os.Getenv("ENV"); v != "" {
+		ENV = v
+		if ENV != "test" && ENV != "prod" {
+			// ENVがprodでもtestでもない場合は異常終了
+			log.Errorf(ctx, "ENV must be 'test' or 'prod': %v", ENV)
+			os.Exit(0)
+		}
+	} else {
+		log.Errorf(ctx, "Failed to get ENV. '%v'", v)
+		os.Exit(0)
+	}
+
+	// HOLIDAY_SHEETID
+	if v := os.Getenv("HOLIDAY_SHEETID"); v != "" {
+		HOLIDAY_SHEETID = v
+	} else {
+		log.Errorf(ctx, "Failed to get holiday sheetId. '%v'", v)
+		os.Exit(0)
+	}
+
+	// STOCKPRICE_SHEETID
+	// sheetIdを環境変数から読み込む
+	if v := os.Getenv("STOCKPRICE_SHEETID"); v != "" {
+		STOCKPRICE_SHEETID = v
+	} else {
+		log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
+		os.Exit(0)
+	}
+}
+
 // spreadsheets clientを取得
 func getSheetClient(r *http.Request) (*sheets.Service, error) {
 	// googleAPIへのclientをリクエストから作成
@@ -320,35 +388,32 @@ func getSheetClient(r *http.Request) (*sheets.Service, error) {
 func isBussinessday(srv *sheets.Service, r *http.Request) bool {
 	ctx := appengine.NewContext(r)
 
-	if v := os.Getenv("ENV"); v == "test" {
+	if ENV == "test" {
 		// test環境は常にtrue
 		return true
-	} else if v == "prod" {
+	}
 
-		// 土日は実行しない
-		jst, _ := time.LoadLocation("Asia/Tokyo")
-		now := time.Now().In(jst)
+	// 以下はprodの場合
 
-		d := now.Weekday()
-		switch d {
-		case 6, 0: // Saturday, Sunday
+	// 土日は実行しない
+	jst, _ := time.LoadLocation("Asia/Tokyo")
+	now := time.Now().In(jst)
+
+	d := now.Weekday()
+	switch d {
+	case 6, 0: // Saturday, Sunday
+		return false
+	}
+
+	today_ymd := now.Format("2006/01/02")
+
+	holidays := getHolidays(srv, r)
+	for _, row := range holidays {
+		holiday := row[0].(string)
+		if holiday == today_ymd {
+			log.Infof(ctx, "Today is holiday.")
 			return false
 		}
-
-		today_ymd := now.Format("2006/01/02")
-
-		holidays := getHolidays(srv, r)
-		for _, row := range holidays {
-			holiday := row[0].(string)
-			if holiday == today_ymd {
-				log.Infof(ctx, "Today is holiday.")
-				return false
-			}
-		}
-	} else {
-		// ENVがprodでもtestでもない場合は異常終了
-		log.Errorf(ctx, "ENV must be 'test' or 'prod': %v", v)
-		os.Exit(0)
 	}
 	return true
 
@@ -360,16 +425,7 @@ func getHolidays(srv *sheets.Service, r *http.Request) [][]interface{} {
 	// 'holiday' worksheet を読み取り
 	// 東京証券取引所の休日: https://www.jpx.co.jp/corporate/calendar/index.html
 
-	sheetId := ""
-	// sheetIdを環境変数から読み込む
-	if v := os.Getenv("HOLIDAY_SHEETID"); v != "" {
-		sheetId = v
-	} else {
-		log.Errorf(ctx, "Failed to get holiday sheetId. '%v'", v)
-		os.Exit(0)
-	}
-	readRange := "holiday"
-	resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
+	resp, err := srv.Spreadsheets.Values.Get(HOLIDAY_SHEETID, "holiday").Do()
 	if err != nil {
 		log.Errorf(ctx, "Unable to retrieve data from sheet: %v", err)
 		os.Exit(0)
@@ -385,19 +441,7 @@ func getHolidays(srv *sheets.Service, r *http.Request) [][]interface{} {
 func readCode(srv *sheets.Service, r *http.Request, sheet string) [][]interface{} {
 	ctx := appengine.NewContext(r)
 
-	// 'code' worksheet を読み取り
-
-	sheetId := ""
-	// sheetIdを環境変数から読み込む
-	if v := os.Getenv("CODE_SHEETID"); v != "" {
-		sheetId = v
-	} else {
-		log.Errorf(ctx, "Failed to get codes sheetId. '%v'", v)
-		os.Exit(0)
-	}
-	//readRange := "code"
-	readRange := sheet
-	resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
+	resp, err := srv.Spreadsheets.Values.Get(CODE_SHEETID, sheet).Do()
 	if err != nil {
 		log.Errorf(ctx, "Unable to retrieve data from sheet: %v", err)
 		os.Exit(0)
@@ -599,17 +643,7 @@ func getUniqPrice(r *http.Request, prices []codePrice, existData map[string]bool
 func writeStockpriceDaily(r *http.Request, srv *sheets.Service, prices []codePrice) {
 	ctx := appengine.NewContext(r)
 
-	sheetId := ""
-	// sheetIdを環境変数から読み込む
-	if v := os.Getenv("DAILYPRICE_SHEETID"); v != "" {
-		sheetId = v
-	} else {
-		log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
-		os.Exit(0)
-	}
-	writeRange := "daily"
-
-	// spreadsheetに書き込み対象の行列を作成
+	// spreadsheetに書き込む対象の行列を作成
 	var matrix = make([][]interface{}, 0)
 	for _, p := range prices {
 		var ele = make([]interface{}, 0)
@@ -636,7 +670,7 @@ func writeStockpriceDaily(r *http.Request, srv *sheets.Service, prices []codePri
 			return
 		}
 		attempt = attempt + 1
-		resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
+		resp, err := srv.Spreadsheets.Values.Append(DAILYPRICE_SHEETID, "daily", valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
 		if err != nil {
 			log.Warningf(ctx, "Unable to write value. %v. attempt: %d", err, attempt)
 			time.Sleep(1 * time.Second) // 1秒待つ
@@ -655,16 +689,6 @@ func writeStockpriceDaily(r *http.Request, srv *sheets.Service, prices []codePri
 func writeStockprice(srv *sheets.Service, r *http.Request, code string, date string, stockprice string) {
 	ctx := appengine.NewContext(r)
 
-	sheetId := ""
-	// sheetIdを環境変数から読み込む
-	if v := os.Getenv("STOCKPRICE_SHEETID"); v != "" {
-		sheetId = v
-	} else {
-		log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
-		os.Exit(0)
-	}
-	writeRange := "stockprice"
-
 	valueRange := &sheets.ValueRange{
 		MajorDimension: "ROWS",
 		Values: [][]interface{}{
@@ -680,7 +704,7 @@ func writeStockprice(srv *sheets.Service, r *http.Request, code string, date str
 			return
 		}
 		attempt = attempt + 1
-		resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
+		resp, err := srv.Spreadsheets.Values.Append(STOCKPRICE_SHEETID, "stockprice", valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
 		if err != nil {
 			log.Warningf(ctx, "Unable to write value. %v. attempt: %d", err, attempt)
 			time.Sleep(1 * time.Second) // 1秒待つ
