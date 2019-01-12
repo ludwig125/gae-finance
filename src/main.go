@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -468,6 +469,8 @@ func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
 		re := regexp.MustCompile(`[0-9]+/[0-9]+`).Copy()
 		// 日付を取得
 		date = re.FindString(date)
+		// 日付に年を追加
+		date = formatYear(date)
 
 		var arr []string
 		arr = append(arr, date)
@@ -490,6 +493,35 @@ func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
 		return nil, fmt.Errorf("%s doesn't have enough elems", code)
 	}
 	return date_price, nil
+}
+
+func formatYear(date string) string {
+	// 日付に年を追加する関数。現在の日付を元に前の年のものかどうか判断する
+
+	jst, _ := time.LoadLocation("Asia/Tokyo")
+	now := time.Now().In(jst)
+	// 現在の年月を出す（goのtimeフォーマットに注意！）
+	year := now.Format("2006")
+	month := now.Format("1")
+
+	// 年をintに変換
+	y, _ := strconv.Atoi(year)
+
+	// スクレイピングしたデータを月と日に分ける
+	date_md := strings.Split(date, "/")
+
+	var buffer = bytes.NewBuffer(make([]byte, 0, 30))
+	// スクレイピングしたデータが現在の月より先なら前の年のデータ
+	// ex. 1月にスクレイピングしたデータに12月が含まれていたら前年のはず
+	if date_md[0] > month {
+		buffer.WriteString(strconv.Itoa(y - 1))
+	} else {
+		buffer.WriteString(year)
+	}
+	// あらためて年/月/日の形にして返す
+	buffer.WriteString("/")
+	buffer.WriteString(date)
+	return buffer.String()
 }
 
 func doScrape(r *http.Request, code string) (string, string, error) {
