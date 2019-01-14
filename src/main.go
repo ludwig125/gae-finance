@@ -408,7 +408,13 @@ func isBussinessday(srv *sheets.Service, r *http.Request) bool {
 
 	today_ymd := now.Format("2006/01/02")
 
-	holidays := getHolidays(srv, r)
+	// 'holiday' worksheet を読み取り
+	// 東京証券取引所の休日: https://www.jpx.co.jp/corporate/calendar/index.html
+	holidays := getSheetData(r, srv, HOLIDAY_SHEETID, "holiday")
+	if holidays == nil || len(holidays) == 0 {
+		log.Infof(ctx, "Failed to get holidays.")
+		os.Exit(0)
+	}
 	for _, row := range holidays {
 		holiday := row[0].(string)
 		if holiday == today_ymd {
@@ -420,24 +426,24 @@ func isBussinessday(srv *sheets.Service, r *http.Request) bool {
 
 }
 
-func getHolidays(srv *sheets.Service, r *http.Request) [][]interface{} {
-	ctx := appengine.NewContext(r)
-
-	// 'holiday' worksheet を読み取り
-	// 東京証券取引所の休日: https://www.jpx.co.jp/corporate/calendar/index.html
-
-	resp, err := srv.Spreadsheets.Values.Get(HOLIDAY_SHEETID, "holiday").Do()
-	if err != nil {
-		log.Errorf(ctx, "Unable to retrieve data from sheet: %v", err)
-		os.Exit(0)
-	}
-	status := resp.ServerResponse.HTTPStatusCode
-	if status != 200 {
-		log.Errorf(ctx, "HTTPstatus error. %v", status)
-		os.Exit(0)
-	}
-	return resp.Values
-}
+//func getHolidays(srv *sheets.Service, r *http.Request) [][]interface{} {
+//	ctx := appengine.NewContext(r)
+//
+//	// 'holiday' worksheet を読み取り
+//	// 東京証券取引所の休日: https://www.jpx.co.jp/corporate/calendar/index.html
+//
+//	resp, err := srv.Spreadsheets.Values.Get(HOLIDAY_SHEETID, "holiday").Do()
+//	if err != nil {
+//		log.Errorf(ctx, "Unable to retrieve data from sheet: %v", err)
+//		os.Exit(0)
+//	}
+//	status := resp.ServerResponse.HTTPStatusCode
+//	if status != 200 {
+//		log.Errorf(ctx, "HTTPstatus error. %v", status)
+//		os.Exit(0)
+//	}
+//	return resp.Values
+//}
 
 func readCode(srv *sheets.Service, r *http.Request, sheet string) [][]interface{} {
 	ctx := appengine.NewContext(r)
@@ -779,7 +785,7 @@ func getSheetData(r *http.Request, srv *sheets.Service, sid string, sname string
 	for {
 		// MaxRetries を超えていたらnilを返す
 		if attempt >= MaxRetries {
-			log.Errorf(ctx, "Failed to retrieve data from sheet. attempt: %d", attempt)
+			log.Errorf(ctx, "Failed to retrieve data from sheet. attempt: %d. reached MaxRetries!", attempt)
 			return nil
 		}
 		attempt = attempt + 1
