@@ -66,14 +66,15 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// spreadsheetから銘柄コードを取得
-	codes := readCode(sheetService, r, "ichibu")
-	if len(codes) == 0 {
+	//codes := readCode(sheetService, r, "ichibu")
+	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
+	if codes == nil || len(codes) == 0 {
 		log.Infof(ctx, "No target data.")
 		os.Exit(0)
 	}
 
 	// 重複書き込みをしないように既存のデータに目印をつける
-	resp := getSheetData(r, sheetService, "DAILYPRICE_SHEETID", "daily")
+	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
 	existData := map[string]bool{}
 	for _, v := range resp {
 		// codeと日付の組をmapに登録
@@ -161,14 +162,16 @@ func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// spreadsheetから銘柄コードを取得
-	codes := readCode(sheetService, r, "ichibu")
-	if len(codes) == 0 {
+	//codes := readCode(sheetService, r, "ichibu")
+	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
+	if codes == nil || len(codes) == 0 {
+		//if len(codes) == 0 {
 		log.Infof(ctx, "No target data.")
 		return
 	}
 
 	// spreadsheetから株価を取得する
-	resp := getSheetData(r, sheetService, "DAILYPRICE_SHEETID", "daily")
+	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
 	if resp == nil {
 		log.Infof(ctx, "No data")
 		return
@@ -243,8 +246,10 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// spreadsheetから銘柄コードを取得
-	codes := readCode(sheetService, r, "code")
-	if len(codes) == 0 {
+	//codes := readCode(sheetService, r, "code")
+	codes := getSheetData(r, sheetService, CODE_SHEETID, "code")
+	if codes == nil || len(codes) == 0 {
+		//if len(codes) == 0 {
 		log.Infof(ctx, "No target data.")
 		os.Exit(0)
 	}
@@ -265,7 +270,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(1 * time.Second) // 1秒待つ
 	}
 	// spreadsheetから株価を取得する
-	resp := getSheetData(r, sheetService, "STOCKPRICE_SHEETID", "stockprice")
+	resp := getSheetData(r, sheetService, STOCKPRICE_SHEETID, "stockprice")
 	if resp == nil {
 		log.Infof(ctx, "No data")
 		return
@@ -330,6 +335,7 @@ func getEnv(r *http.Request) {
 	// CODE_SHEETID
 	if v := os.Getenv("CODE_SHEETID"); v != "" {
 		CODE_SHEETID = v
+		log.Infof(ctx, "Succeeded to get codes sheetId.")
 	} else {
 		log.Errorf(ctx, "Failed to get codes sheetId. '%v'", v)
 		os.Exit(0)
@@ -338,8 +344,9 @@ func getEnv(r *http.Request) {
 	// DAILYPRICE_SHEETID
 	if v := os.Getenv("DAILYPRICE_SHEETID"); v != "" {
 		DAILYPRICE_SHEETID = v
+		log.Infof(ctx, "Succeeded to get dailyprice sheetId.")
 	} else {
-		log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
+		log.Errorf(ctx, "Failed to get dailyprice sheetId. '%v'", v)
 		os.Exit(0)
 	}
 
@@ -351,6 +358,7 @@ func getEnv(r *http.Request) {
 			log.Errorf(ctx, "ENV must be 'test' or 'prod': %v", ENV)
 			os.Exit(0)
 		}
+		log.Infof(ctx, "Succeeded to get env.")
 	} else {
 		log.Errorf(ctx, "Failed to get ENV. '%v'", v)
 		os.Exit(0)
@@ -359,6 +367,7 @@ func getEnv(r *http.Request) {
 	// HOLIDAY_SHEETID
 	if v := os.Getenv("HOLIDAY_SHEETID"); v != "" {
 		HOLIDAY_SHEETID = v
+		log.Infof(ctx, "Succeeded to get holiday sheetId.")
 	} else {
 		log.Errorf(ctx, "Failed to get holiday sheetId. '%v'", v)
 		os.Exit(0)
@@ -368,6 +377,7 @@ func getEnv(r *http.Request) {
 	// sheetIdを環境変数から読み込む
 	if v := os.Getenv("STOCKPRICE_SHEETID"); v != "" {
 		STOCKPRICE_SHEETID = v
+		log.Infof(ctx, "Succeeded to get stockprice sheetId.")
 	} else {
 		log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
 		os.Exit(0)
@@ -445,21 +455,21 @@ func isBussinessday(srv *sheets.Service, r *http.Request) bool {
 //	return resp.Values
 //}
 
-func readCode(srv *sheets.Service, r *http.Request, sheet string) [][]interface{} {
-	ctx := appengine.NewContext(r)
-
-	resp, err := srv.Spreadsheets.Values.Get(CODE_SHEETID, sheet).Do()
-	if err != nil {
-		log.Errorf(ctx, "Unable to retrieve data from sheet: %v", err)
-		os.Exit(0)
-	}
-	status := resp.ServerResponse.HTTPStatusCode
-	if status != 200 {
-		log.Errorf(ctx, "HTTPstatus error. %v", status)
-		os.Exit(0)
-	}
-	return resp.Values
-}
+//func readCode(srv *sheets.Service, r *http.Request, sheet string) [][]interface{} {
+//	ctx := appengine.NewContext(r)
+//
+//	resp, err := srv.Spreadsheets.Values.Get(CODE_SHEETID, sheet).Do()
+//	if err != nil {
+//		log.Errorf(ctx, "Unable to retrieve data from sheet: %v", err)
+//		os.Exit(0)
+//	}
+//	status := resp.ServerResponse.HTTPStatusCode
+//	if status != 200 {
+//		log.Errorf(ctx, "HTTPstatus error. %v", status)
+//		os.Exit(0)
+//	}
+//	return resp.Values
+//}
 
 func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
 	// "DAILY_PRICE_URL"のHDML doc取得
@@ -767,18 +777,18 @@ func writeStockprice(srv *sheets.Service, r *http.Request, code string, date str
 	}
 }
 
-func getSheetData(r *http.Request, srv *sheets.Service, sid string, sname string) [][]interface{} {
+func getSheetData(r *http.Request, srv *sheets.Service, sheetId string, readRange string) [][]interface{} {
 	ctx := appengine.NewContext(r)
 
-	sheetId := ""
-	// sheetIdを環境変数から読み込む
-	if v := os.Getenv(sid); v != "" {
-		sheetId = v
-	} else {
-		log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
-		os.Exit(0)
-	}
-	readRange := sname
+	//sheetId := ""
+	//// sheetIdを環境変数から読み込む
+	//if v := os.Getenv(sid); v != "" {
+	//	sheetId = v
+	//} else {
+	//	log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
+	//	os.Exit(0)
+	//}
+	//readRange := sname
 
 	var MaxRetries = 3
 	attempt := 0
