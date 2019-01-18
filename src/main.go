@@ -436,41 +436,6 @@ func isBussinessday(srv *sheets.Service, r *http.Request) bool {
 
 }
 
-//func getHolidays(srv *sheets.Service, r *http.Request) [][]interface{} {
-//	ctx := appengine.NewContext(r)
-//
-//	// 'holiday' worksheet を読み取り
-//	// 東京証券取引所の休日: https://www.jpx.co.jp/corporate/calendar/index.html
-//
-//	resp, err := srv.Spreadsheets.Values.Get(HOLIDAY_SHEETID, "holiday").Do()
-//	if err != nil {
-//		log.Errorf(ctx, "Unable to retrieve data from sheet: %v", err)
-//		os.Exit(0)
-//	}
-//	status := resp.ServerResponse.HTTPStatusCode
-//	if status != 200 {
-//		log.Errorf(ctx, "HTTPstatus error. %v", status)
-//		os.Exit(0)
-//	}
-//	return resp.Values
-//}
-
-//func readCode(srv *sheets.Service, r *http.Request, sheet string) [][]interface{} {
-//	ctx := appengine.NewContext(r)
-//
-//	resp, err := srv.Spreadsheets.Values.Get(CODE_SHEETID, sheet).Do()
-//	if err != nil {
-//		log.Errorf(ctx, "Unable to retrieve data from sheet: %v", err)
-//		os.Exit(0)
-//	}
-//	status := resp.ServerResponse.HTTPStatusCode
-//	if status != 200 {
-//		log.Errorf(ctx, "HTTPstatus error. %v", status)
-//		os.Exit(0)
-//	}
-//	return resp.Values
-//}
-
 func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
 	// "DAILY_PRICE_URL"のHDML doc取得
 	doc, err := fetchWebpageDoc(r, "DAILY_PRICE_URL", code)
@@ -779,16 +744,6 @@ func writeStockprice(srv *sheets.Service, r *http.Request, code string, date str
 
 func getSheetData(r *http.Request, srv *sheets.Service, sheetId string, readRange string) [][]interface{} {
 	ctx := appengine.NewContext(r)
-
-	//sheetId := ""
-	//// sheetIdを環境変数から読み込む
-	//if v := os.Getenv(sid); v != "" {
-	//	sheetId = v
-	//} else {
-	//	log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
-	//	os.Exit(0)
-	//}
-	//readRange := sname
 
 	var MaxRetries = 3
 	attempt := 0
