@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -468,6 +469,8 @@ func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
 		re := regexp.MustCompile(`[0-9]+/[0-9]+`).Copy()
 		// 日付を取得
 		date = re.FindString(date)
+		// 日付に年をつけたりゼロ埋めしたりする
+		date = formatDate(date)
 
 		var arr []string
 		arr = append(arr, date)
@@ -490,6 +493,45 @@ func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
 		return nil, fmt.Errorf("%s doesn't have enough elems", code)
 	}
 	return date_price, nil
+}
+
+func formatDate(date string) string {
+	// 日付に年を追加する関数。現在の日付を元に前の年のものかどうか判断する
+	// 1/4 のような日付をゼロ埋めして01/04にする
+	// 例えば8/12 のような形で来たdateは 2018/08/12 にして返す
+
+	jst, _ := time.LoadLocation("Asia/Tokyo")
+	now := time.Now().In(jst)
+	// 現在の年月を出す（goのtimeフォーマットに注意！）
+	year := now.Format("2006")
+	month := now.Format("1")
+
+	// 年と月をintに変換
+	// TODO エラーハンドリングする.以下も
+	y, _ := strconv.Atoi(year)
+	m, _ := strconv.Atoi(month)
+
+	// スクレイピングしたデータを月と日に分ける
+	date_md := strings.Split(date, "/")
+	date_m, _ := strconv.Atoi(date_md[0])
+	date_d, _ := strconv.Atoi(date_md[1])
+
+	var buffer = bytes.NewBuffer(make([]byte, 0, 30))
+	// スクレイピングしたデータが現在の月より先なら前の年のデータ
+	// ex. 1月にスクレイピングしたデータに12月が含まれていたら前年のはず
+	if date_m > m {
+		buffer.WriteString(strconv.Itoa(y - 1))
+	} else {
+		buffer.WriteString(year)
+	}
+	// あらためて年/月/日の形にして返す
+	buffer.WriteString("/")
+	// 2桁になるようにゼロパティング
+	buffer.WriteString(fmt.Sprintf("%02d", date_m))
+	buffer.WriteString("/")
+	// 2桁になるようにゼロパティング
+	buffer.WriteString(fmt.Sprintf("%02d", date_d))
+	return buffer.String()
 }
 
 func doScrape(r *http.Request, code string) (string, string, error) {
@@ -629,10 +671,9 @@ func getUniqPrice(r *http.Request, prices []codePrice, existData map[string]bool
 	for _, p := range prices {
 		// codeと日付の組をmapに登録済みのデータと照合
 		cd := fmt.Sprintf("%s %s", p.Code, p.Price[0])
-		//if !sheetData[cd] {
 		if !existData[cd] {
 			uniqPrices = append(uniqPrices, codePrice{p.Code, p.Price})
-			//log.Debugf(ctx, "uniq code price %s %v", p.Code, p.Price)
+			log.Debugf(ctx, "insert code price %s %v", p.Code, p.Price)
 		} else {
 			log.Debugf(ctx, "duplicated code price %s %v", p.Code, p.Price)
 		}
