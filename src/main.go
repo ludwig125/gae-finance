@@ -82,33 +82,48 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 		existData[cd] = true
 	}
 
-	// 100件ずつスクレイピングしてSheetに書き込み
-	MAX := 100
+	// 10件ずつスクレイピングしてSheetに書き込み
+	MAX := 10
 	d := len(codes) / MAX
 	m := len(codes) % MAX
 
+	target := 0
+	inserted := 0
 	if d > 0 {
 		for i := 0; i < d; i++ {
 			partial := codes[MAX*i : MAX*(i+1)]
-			scrapeAndWrite(r, partial, sheetService, existData)
+			tar, ins := scrapeAndWrite(r, partial, sheetService, existData)
+			target += tar
+			inserted += ins
 		}
 	}
 	if m > 0 {
 		partial := codes[MAX*d:]
-		scrapeAndWrite(r, partial, sheetService, existData)
+		tar, ins := scrapeAndWrite(r, partial, sheetService, existData)
+		target += tar
+		inserted += ins
 	}
 
+	log.Infof(ctx, "succeded to write all records. target: %d, inserted: %d", target, inserted)
+	if target != inserted {
+		log.Errorf(ctx, "failed to write all records. target: %d, inserted: %d", target, inserted)
+		os.Exit(0)
+	}
 }
 
-func scrapeAndWrite(r *http.Request, codes [][]interface{}, s *sheets.Service, existData map[string]bool) {
+func scrapeAndWrite(r *http.Request, codes [][]interface{}, s *sheets.Service, existData map[string]bool) (int, int) {
 	// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
 	prices := getEachCodesPrices(r, codes)
 	// シートに存在しないものだけを抽出
 	uniqPrices := getUniqPrice(r, prices, existData)
+
+	target := 0
+	inserted := 0
 	// すでにシートに存在するデータは書き込まない
 	if uniqPrices != nil {
-		writeStockpriceDaily(r, s, uniqPrices)
+		target, inserted = writeStockpriceDaily(r, s, uniqPrices)
 	}
+	return target, inserted
 }
 
 // 複数銘柄についてそれぞれの株価を取得する
@@ -165,7 +180,6 @@ func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
 	//codes := readCode(sheetService, r, "ichibu")
 	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
 	if codes == nil || len(codes) == 0 {
-		//if len(codes) == 0 {
 		log.Infof(ctx, "No target data.")
 		return
 	}
@@ -654,15 +668,15 @@ func getUniqPrice(r *http.Request, prices []codePrice, existData map[string]bool
 		cd := fmt.Sprintf("%s %s", p.Code, p.Price[0])
 		if !existData[cd] {
 			uniqPrices = append(uniqPrices, codePrice{p.Code, p.Price})
-			log.Debugf(ctx, "insert code price %s %v", p.Code, p.Price)
+			log.Debugf(ctx, "insert target code and price %s %v", p.Code, p.Price)
 		} else {
-			log.Debugf(ctx, "duplicated code price %s %v", p.Code, p.Price)
+			log.Debugf(ctx, "duplicated code and price %s %v", p.Code, p.Price)
 		}
 	}
 	return uniqPrices
 }
 
-func writeStockpriceDaily(r *http.Request, srv *sheets.Service, prices []codePrice) {
+func writeStockpriceDaily(r *http.Request, srv *sheets.Service, prices []codePrice) (int, int) {
 	ctx := appengine.NewContext(r)
 
 	// spreadsheetに書き込む対象の行列を作成
@@ -683,28 +697,34 @@ func writeStockpriceDaily(r *http.Request, srv *sheets.Service, prices []codePri
 		Values: matrix,
 	}
 
+	// spreadsheetに書き込むレコードの件数
+	target_num := len(matrix)
+	log.Infof(ctx, "insert target num: %v", target_num)
+
 	var MaxRetries = 3
 	attempt := 0
 	for {
 		// MaxRetries を超えていたら終了
 		if attempt >= MaxRetries {
 			log.Errorf(ctx, "Failed to retrieve data from sheet. attempt: %d", attempt)
-			return
+			// 書き込み対象の件数と成功した件数
+			return target_num, 0
 		}
 		attempt = attempt + 1
 		resp, err := srv.Spreadsheets.Values.Append(DAILYPRICE_SHEETID, "daily", valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
 		if err != nil {
 			log.Warningf(ctx, "Unable to write value. %v. attempt: %d", err, attempt)
-			time.Sleep(1 * time.Second) // 1秒待つ
+			time.Sleep(3 * time.Second) // 3秒待つ
 			continue
 		}
 		status := resp.ServerResponse.HTTPStatusCode
 		if status != 200 {
 			log.Warningf(ctx, "HTTPstatus error. %v. attempt: %d", status, attempt)
-			time.Sleep(1 * time.Second) // 1秒待つ
+			time.Sleep(3 * time.Second) // 3秒待つ
 			continue
 		}
-		return
+		// 書き込み対象の件数と成功した件数
+		return target_num, target_num
 	}
 }
 
