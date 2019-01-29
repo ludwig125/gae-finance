@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -18,7 +19,11 @@ import (
 	"google.golang.org/appengine" // Required external App Engine library
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/urlfetch" // 外部にhttpするため
+
+	_ "github.com/go-sql-driver/mysql"
 )
+
+var db *sql.DB
 
 // codeごとの株価
 type codePrice struct {
@@ -37,6 +42,7 @@ func main() {
 	http.HandleFunc("/daily", indexHandlerDaily)
 	http.HandleFunc("/calc_daily", indexHandlerCalcDaily)
 	http.HandleFunc("/", indexHandler)
+	http.HandleFunc("/sql", sqlHandler)
 	appengine.Main() // Starts the server to receive requests
 }
 
@@ -44,6 +50,58 @@ func main() {
 func start(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
 	log.Infof(c, "STARTING")
+}
+
+func sqlHandler(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	var (
+		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
+		user           = mustGetenv(r, "CLOUDSQL_USER")
+		password       = os.Getenv("CLOUDSQL_PASSWORD") // NOTE: password may be empty
+	)
+	//var (
+	//	connectionName = "myfinance-01:asia-northeast1:myfinance"
+	//	user           = "root"
+	//	password       = "1234" // NOTE: password may be empty
+	//)
+
+	var err error
+	db, err = sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/", user, password, connectionName))
+	if err != nil {
+		log.Errorf(ctx, "Could not open db: %v", err)
+	}
+	log.Infof(ctx, "Succeded to open db")
+
+	w.Header().Set("Content-Type", "text/plain")
+
+	rows, err := db.Query("SHOW DATABASES")
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Could not query db: %v", err), 500)
+		return
+	}
+	defer rows.Close()
+
+	buf := bytes.NewBufferString("Databases:\n")
+	for rows.Next() {
+		var dbName string
+		if err := rows.Scan(&dbName); err != nil {
+			http.Error(w, fmt.Sprintf("Could not scan result: %v", err), 500)
+			return
+		}
+		fmt.Fprintf(buf, "- %s\n", dbName)
+	}
+	w.Write(buf.Bytes())
+}
+
+func mustGetenv(r *http.Request, k string) string {
+	ctx := appengine.NewContext(r)
+	v := os.Getenv(k)
+	if v == "" {
+		log.Errorf(ctx, "%s environment variable not set.", k)
+	}
+	return v
 }
 
 func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
