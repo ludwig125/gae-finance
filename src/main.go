@@ -56,16 +56,12 @@ func sqlHandler(w http.ResponseWriter, r *http.Request) {
 	// GAE log
 	ctx := appengine.NewContext(r)
 
+	log.Infof(ctx, "appengine.IsDevAppServer: %v", appengine.IsDevAppServer())
 	var (
 		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
 		user           = mustGetenv(r, "CLOUDSQL_USER")
-		password       = os.Getenv("CLOUDSQL_PASSWORD") // NOTE: password may be empty
+		password       = os.Getenv("CLOUDSQL_PASSWORD")
 	)
-	//var (
-	//	connectionName = "myfinance-01:asia-northeast1:myfinance"
-	//	user           = "root"
-	//	password       = "1234" // NOTE: password may be empty
-	//)
 
 	var err error
 	db, err = sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/", user, password, connectionName))
