@@ -23,8 +23,6 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
-var db *sql.DB
-
 // codeごとの株価
 type codePrice struct {
 	Code  string
@@ -35,6 +33,15 @@ type codePrice struct {
 type codeRate struct {
 	Code string
 	Rate []float64
+}
+
+// cloudsql
+var db *sql.DB
+
+type dbInfo struct {
+	connectionName string
+	user           string
+	password       string
 }
 
 func main() {
@@ -57,23 +64,78 @@ func sqlHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := appengine.NewContext(r)
 
 	log.Infof(ctx, "appengine.IsDevAppServer: %v", appengine.IsDevAppServer())
-	var (
-		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
-		user           = mustGetenv(r, "CLOUDSQL_USER")
-		password       = os.Getenv("CLOUDSQL_PASSWORD")
-	)
-
+	var dbinfo dbInfo
+	dbinfo.connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
+	dbinfo.user = mustGetenv(r, "CLOUDSQL_USER")
+	dbinfo.password = os.Getenv("CLOUDSQL_PASSWORD")
 	var err error
-	db, err = sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/", user, password, connectionName))
+	db, err = dialSql(dbinfo)
 	if err != nil {
 		log.Errorf(ctx, "Could not open db: %v", err)
 	}
 	log.Infof(ctx, "Succeded to open db")
+	showDatabases(w)
 
+	selectTable(w, r, "daily")
+
+	//	var (
+	//		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
+	//		user           = mustGetenv(r, "CLOUDSQL_USER")
+	//		password       = os.Getenv("CLOUDSQL_PASSWORD")
+	//	)
+	//
+	//	var err error
+	//	db, err = sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/", user, password, connectionName))
+	//	if err != nil {
+	//		log.Errorf(ctx, "Could not open db: %v", err)
+	//	}
+	//	log.Infof(ctx, "Succeded to open db")
+	//
+	//	w.Header().Set("Content-Type", "text/plain")
+	//
+	//	rows, err := db.Query("SHOW DATABASES")
+	//	if err != nil {
+	//		http.Error(w, fmt.Sprintf("Could not query db: %v", err), 500)
+	//		return
+	//	}
+	//	defer rows.Close()
+	//
+	//	buf := bytes.NewBufferString("Databases:\n")
+	//	for rows.Next() {
+	//		var dbName string
+	//		if err := rows.Scan(&dbName); err != nil {
+	//			http.Error(w, fmt.Sprintf("Could not scan result: %v", err), 500)
+	//			return
+	//		}
+	//		fmt.Fprintf(buf, "- %s\n", dbName)
+	//	}
+	//	w.Write(buf.Bytes())
+}
+
+func mustGetenv(r *http.Request, k string) string {
+	ctx := appengine.NewContext(r)
+	v := os.Getenv(k)
+	if v == "" {
+		log.Errorf(ctx, "%s environment variable not set.", k)
+	}
+	return v
+}
+
+func dialSql(d dbInfo) (*sql.DB, error) {
+	if appengine.IsDevAppServer() {
+		//return sql.Open("mysql", "root@/")
+		return sql.Open("mysql", "root@/stockprice")
+	}
+	//return sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/", d.user, d.password, d.connectionName))
+	return sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/stockprice", d.user, d.password, d.connectionName))
+}
+
+func showDatabases(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/plain")
 
 	rows, err := db.Query("SHOW DATABASES")
 	if err != nil {
+		// ここあとでGAE用のログに変える
 		http.Error(w, fmt.Sprintf("Could not query db: %v", err), 500)
 		return
 	}
@@ -91,13 +153,76 @@ func sqlHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(buf.Bytes())
 }
 
-func mustGetenv(r *http.Request, k string) string {
+func selectTable(w http.ResponseWriter, r *http.Request, table string) {
 	ctx := appengine.NewContext(r)
-	v := os.Getenv(k)
-	if v == "" {
-		log.Errorf(ctx, "%s environment variable not set.", k)
+	w.Header().Set("Content-Type", "text/plain")
+
+	//sql := fmt.Sprintf("SELECT code, date, open, high, low, close, turnover, modified FROM %s", table)
+	sql := fmt.Sprintf("SELECT code, date FROM %s", table)
+	// テーブル名にplaceholder "?" は使えないらしい
+	rows, err := db.Query(sql)
+	if err != nil {
+		log.Errorf(ctx, "Could not query db: %v", err)
+		return
 	}
-	return v
+	defer rows.Close()
+
+	for rows.Next() {
+		//var code, date, open, high, low, close, turnover, modified string
+		var code, date string
+		//if err := rows.Scan(&code, &date, &open, &high, &low, &close, &turnover, &modified); err != nil {
+		if err := rows.Scan(&code, &date); err != nil {
+			log.Errorf(ctx, "could not scan: %v", err)
+		}
+		//log.Infof(ctx, code, date, open, high, low, close, turnover, modified)
+		log.Infof(ctx, "%s, %s", code, date)
+	}
+
+	if err := rows.Err(); err != nil {
+		log.Errorf(ctx, "found error: %v", err)
+	}
+	//// Get column names
+	//columns, err := rows.Columns()
+	//if err != nil {
+	//	log.Errorf(ctx, fmt.Sprintf("failed to get columns: %v", err))
+	//}
+
+	//// Make a slice for the values
+	//values := make([]sql.RawBytes, len(columns))
+
+	//// rows.Scan wants '[]interface{}' as an argument, so we must copy the
+	//// references into such a slice
+	//// See http://code.google.com/p/go-wiki/wiki/InterfaceSlice for details
+	//scanArgs := make([]interface{}, len(values))
+	//for i := range values {
+	//	scanArgs[i] = &values[i]
+	//}
+
+	//// Fetch rows
+	//for rows.Next() {
+	//	// get RawBytes from data
+	//	err = rows.Scan(scanArgs...)
+	//	if err != nil {
+	//		log.Errorf(ctx, "failed to scan: %v", err)
+	//	}
+
+	//	// Now do something with the data.
+	//	// Here we just print each column as a string.
+	//	var value string
+	//	for i, col := range values {
+	//		// Here we can check if the value is nil (NULL value)
+	//		if col == nil {
+	//			value = "NULL"
+	//		} else {
+	//			value = string(col)
+	//		}
+	//		fmt.Println(columns[i], ": ", value)
+	//	}
+	//	fmt.Println("-----------------------------------")
+	//}
+	//if err = rows.Err(); err != nil {
+	//	log.Errorf(ctx, "row error: %v", err)
+	//}
 }
 
 func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {

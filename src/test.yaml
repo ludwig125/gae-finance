@@ -25,4 +25,5 @@ env_variables:
   # cloud sql
   CLOUDSQL_CONNECTION_NAME: "myfinance-01:asia-northeast1:myfinance"
   CLOUDSQL_USER: root
-  CLOUDSQL_PASSWORD: ""
+  include:
+  - cloudsql_secret.yaml
