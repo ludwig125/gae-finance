@@ -157,72 +157,69 @@ func selectTable(w http.ResponseWriter, r *http.Request, table string) {
 	ctx := appengine.NewContext(r)
 	w.Header().Set("Content-Type", "text/plain")
 
-	//sql := fmt.Sprintf("SELECT code, date, open, high, low, close, turnover, modified FROM %s", table)
-	sql := fmt.Sprintf("SELECT code, date FROM %s", table)
-	// テーブル名にplaceholder "?" は使えないらしい
-	rows, err := db.Query(sql)
+	// テーブル名にplaceholder "?" は使えないらしいのでここで組み立て
+	q := fmt.Sprintf("SELECT code, date, open, high, low, close, turnover, modified FROM %s", table)
+	rows, err := db.Query(q)
 	if err != nil {
-		log.Errorf(ctx, "Could not query db: %v", err)
+		log.Errorf(ctx, "failed to select table: %s, err: %v", table, err)
 		return
 	}
 	defer rows.Close()
 
-	for rows.Next() {
-		//var code, date, open, high, low, close, turnover, modified string
-		var code, date string
-		//if err := rows.Scan(&code, &date, &open, &high, &low, &close, &turnover, &modified); err != nil {
-		if err := rows.Scan(&code, &date); err != nil {
-			log.Errorf(ctx, "could not scan: %v", err)
-		}
-		//log.Infof(ctx, code, date, open, high, low, close, turnover, modified)
-		log.Infof(ctx, "%s, %s", code, date)
-	}
-
-	if err := rows.Err(); err != nil {
-		log.Errorf(ctx, "found error: %v", err)
-	}
-	//// Get column names
-	//columns, err := rows.Columns()
-	//if err != nil {
-	//	log.Errorf(ctx, fmt.Sprintf("failed to get columns: %v", err))
-	//}
-
-	//// Make a slice for the values
-	//values := make([]sql.RawBytes, len(columns))
-
-	//// rows.Scan wants '[]interface{}' as an argument, so we must copy the
-	//// references into such a slice
-	//// See http://code.google.com/p/go-wiki/wiki/InterfaceSlice for details
-	//scanArgs := make([]interface{}, len(values))
-	//for i := range values {
-	//	scanArgs[i] = &values[i]
-	//}
-
-	//// Fetch rows
-	//for rows.Next() {
-	//	// get RawBytes from data
-	//	err = rows.Scan(scanArgs...)
-	//	if err != nil {
-	//		log.Errorf(ctx, "failed to scan: %v", err)
-	//	}
-
-	//	// Now do something with the data.
-	//	// Here we just print each column as a string.
-	//	var value string
-	//	for i, col := range values {
-	//		// Here we can check if the value is nil (NULL value)
-	//		if col == nil {
-	//			value = "NULL"
-	//		} else {
-	//			value = string(col)
+	//	for rows.Next() {
+	//		var code, date, open, high, low, close, turnover, modified string
+	//		if err := rows.Scan(&code, &date, &open, &high, &low, &close, &turnover, &modified); err != nil {
+	//			log.Errorf(ctx, "could not scan %s table column: %v", table, err)
 	//		}
-	//		fmt.Println(columns[i], ": ", value)
+	//		log.Infof(ctx, "%s %s %s %s %s %s %s %s", code, date, open, high, low, close, turnover, modified)
 	//	}
-	//	fmt.Println("-----------------------------------")
-	//}
-	//if err = rows.Err(); err != nil {
-	//	log.Errorf(ctx, "row error: %v", err)
-	//}
+	//
+	//	if err := rows.Err(); err != nil {
+	//		log.Errorf(ctx, "found error while select table: %v", err)
+	//	}
+
+	// 参考：https://github.com/go-sql-driver/mysql/wiki/Examples
+	// テーブルから列名を取得する
+	columns, err := rows.Columns()
+	if err != nil {
+		log.Errorf(ctx, fmt.Sprintf("failed to get columns: %v", err))
+	}
+
+	// rows.Scan は引数として'[]interface{}'が必要なので,
+	// この引数scanArgsに列のサイズだけ確保した変数の参照をコピー
+	// See http://code.google.com/p/go-wiki/wiki/InterfaceSlice for details
+	values := make([]sql.RawBytes, len(columns))
+	scanArgs := make([]interface{}, len(values))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	// Fetch rows
+	for rows.Next() {
+		// get RawBytes from data
+		err = rows.Scan(scanArgs...)
+		if err != nil {
+			log.Errorf(ctx, "failed to scan: %v", err)
+		}
+
+		// Now do something with the data.
+		// Here we just print each column as a string.
+		var value string
+		for i, col := range values {
+			// Here we can check if the value is nil (NULL value)
+			if col == nil {
+				value = "NULL"
+			} else {
+				//value = string(col)
+				//何故かopenの前に改行が入っていたので削除
+				value = strings.Replace(string(col), "\n", "", -1)
+			}
+			log.Infof(ctx, "%v : %v", columns[i], value)
+		}
+	}
+	if err = rows.Err(); err != nil {
+		log.Errorf(ctx, "row error: %v", err)
+	}
 }
 
 func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
