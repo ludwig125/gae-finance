@@ -23,7 +23,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
-// codeごとの株価
+// codeごとの株価 スクレイピングした時のcode毎のデータがPriceに入る
 type codePrice struct {
 	Code  string
 	Price []string
@@ -33,6 +33,20 @@ type codePrice struct {
 type codeRate struct {
 	Code string
 	Rate []float64
+}
+
+// フォーマットは以下に依存
+// https://www.nikkei.com/nkd/company/history/dprice/?scode=7203&ba=1
+// 銘柄 日付 始値 高値 安値 終値 売買高 修正後終値
+type dailyStockPrice struct {
+	code     string
+	date     string
+	open     string
+	high     string
+	low      string
+	close    string
+	turnover string
+	modified string
 }
 
 // cloudsql
@@ -76,40 +90,23 @@ func sqlHandler(w http.ResponseWriter, r *http.Request) {
 	log.Infof(ctx, "Succeded to open db")
 	showDatabases(w)
 
-	selectTable(w, r, "daily")
+	selectTable(r, "daily")
 
-	//	var (
-	//		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
-	//		user           = mustGetenv(r, "CLOUDSQL_USER")
-	//		password       = os.Getenv("CLOUDSQL_PASSWORD")
-	//	)
-	//
-	//	var err error
-	//	db, err = sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/", user, password, connectionName))
-	//	if err != nil {
-	//		log.Errorf(ctx, "Could not open db: %v", err)
-	//	}
-	//	log.Infof(ctx, "Succeded to open db")
-	//
-	//	w.Header().Set("Content-Type", "text/plain")
-	//
-	//	rows, err := db.Query("SHOW DATABASES")
-	//	if err != nil {
-	//		http.Error(w, fmt.Sprintf("Could not query db: %v", err), 500)
-	//		return
-	//	}
-	//	defer rows.Close()
-	//
-	//	buf := bytes.NewBufferString("Databases:\n")
-	//	for rows.Next() {
-	//		var dbName string
-	//		if err := rows.Scan(&dbName); err != nil {
-	//			http.Error(w, fmt.Sprintf("Could not scan result: %v", err), 500)
-	//			return
-	//		}
-	//		fmt.Fprintf(buf, "- %s\n", dbName)
-	//	}
-	//	w.Write(buf.Bytes())
+	// read environment values
+	getEnv(r)
+
+	// spreadsheetのclientを取得
+	sheetService, err := getSheetClient(r)
+	if err != nil {
+		log.Errorf(ctx, "err: %v", err)
+		os.Exit(0)
+	}
+	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
+	if resp == nil {
+		log.Errorf(ctx, "failed to fetch sheetdata: '%v'", resp)
+		os.Exit(0)
+	}
+	insertDailyPrice(r, "daily", resp)
 }
 
 func mustGetenv(r *http.Request, k string) string {
@@ -153,30 +150,17 @@ func showDatabases(w http.ResponseWriter) {
 	w.Write(buf.Bytes())
 }
 
-func selectTable(w http.ResponseWriter, r *http.Request, table string) {
+func selectTable(r *http.Request, table string) {
 	ctx := appengine.NewContext(r)
-	w.Header().Set("Content-Type", "text/plain")
 
 	// テーブル名にplaceholder "?" は使えないらしいのでここで組み立て
-	q := fmt.Sprintf("SELECT code, date, open, high, low, close, turnover, modified FROM %s", table)
+	q := fmt.Sprintf("SELECT * FROM %s", table)
 	rows, err := db.Query(q)
 	if err != nil {
 		log.Errorf(ctx, "failed to select table: %s, err: %v", table, err)
 		return
 	}
 	defer rows.Close()
-
-	//	for rows.Next() {
-	//		var code, date, open, high, low, close, turnover, modified string
-	//		if err := rows.Scan(&code, &date, &open, &high, &low, &close, &turnover, &modified); err != nil {
-	//			log.Errorf(ctx, "could not scan %s table column: %v", table, err)
-	//		}
-	//		log.Infof(ctx, "%s %s %s %s %s %s %s %s", code, date, open, high, low, close, turnover, modified)
-	//	}
-	//
-	//	if err := rows.Err(); err != nil {
-	//		log.Errorf(ctx, "found error while select table: %v", err)
-	//	}
 
 	// 参考：https://github.com/go-sql-driver/mysql/wiki/Examples
 	// テーブルから列名を取得する
@@ -193,6 +177,7 @@ func selectTable(w http.ResponseWriter, r *http.Request, table string) {
 	for i := range values {
 		scanArgs[i] = &values[i]
 	}
+	retVals := make([]interface{}, 0)
 
 	// Fetch rows
 	for rows.Next() {
@@ -213,6 +198,7 @@ func selectTable(w http.ResponseWriter, r *http.Request, table string) {
 				//value = string(col)
 				//何故かopenの前に改行が入っていたので削除
 				value = strings.Replace(string(col), "\n", "", -1)
+				retVals = append(retVals, value)
 			}
 			log.Infof(ctx, "%v : %v", columns[i], value)
 		}
@@ -220,6 +206,29 @@ func selectTable(w http.ResponseWriter, r *http.Request, table string) {
 	if err = rows.Err(); err != nil {
 		log.Errorf(ctx, "row error: %v", err)
 	}
+	log.Infof(ctx, "%v", retVals)
+}
+
+func insertDailyPrice(r *http.Request, table string, resp [][]interface{}) {
+	ctx := appengine.NewContext(r)
+
+	// insert対象
+	ins := ""
+	for _, v := range resp {
+		log.Infof(ctx, "%v", v)
+		ins += fmt.Sprintf("(%s, %s, %s, %s, %s, %s, %s, %s),", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7])
+	}
+	// 末尾の,を除去
+	ins = strings.TrimRight(ins, ",")
+
+	query := fmt.Sprintf("INSERT IGNORE INTO daily (code, date, open, high, low, close, turnover, modified) VALUES %s;", ins)
+	log.Infof(ctx, "%s", query)
+	rows, err := db.Query(query)
+	if err != nil {
+		log.Errorf(ctx, "failed to insert table: %s, err: %v", table, err)
+		return
+	}
+	defer rows.Close()
 }
 
 func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
