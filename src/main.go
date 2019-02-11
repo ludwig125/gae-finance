@@ -195,10 +195,10 @@ func selectTable(r *http.Request, table string) {
 			if col == nil {
 				value = "NULL"
 			} else {
-				//value = string(col)
+				retVals = append(retVals, string(col))
 				//何故かopenの前に改行が入っていたので削除
-				value = strings.Replace(string(col), "\n", "", -1)
-				retVals = append(retVals, value)
+				//value = strings.Replace(string(col), "\n", "", -1)
+				//retVals = append(retVals, value)
 			}
 			log.Infof(ctx, "%v : %v", columns[i], value)
 		}
@@ -212,7 +212,8 @@ func selectTable(r *http.Request, table string) {
 func insertDailyPrice(r *http.Request, table string, resp [][]interface{}) {
 	ctx := appengine.NewContext(r)
 
-	// insert対象
+	// insert対象を組み立てる
+	// TODO: +=の文字列結合は遅いので改良する
 	ins := ""
 	for _, v := range resp {
 		log.Infof(ctx, "%v", v)
@@ -221,6 +222,7 @@ func insertDailyPrice(r *http.Request, table string, resp [][]interface{}) {
 	// 末尾の,を除去
 	ins = strings.TrimRight(ins, ",")
 
+	// INSERT IGNORE INTO daily (code, date, open, high, low, close, turnover, modified) VALUES (...), (),
 	query := fmt.Sprintf("INSERT IGNORE INTO daily (code, date, open, high, low, close, turnover, modified) VALUES %s;", ins)
 	log.Infof(ctx, "%s", query)
 	rows, err := db.Query(query)
