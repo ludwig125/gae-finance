@@ -59,6 +59,9 @@ type dbInfo struct {
 }
 
 func main() {
+	// 環境変数を最初に読み込み
+	getEnv(r)
+
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", indexHandlerDaily)
 	http.HandleFunc("/calc_daily", indexHandlerCalcDaily)
@@ -91,9 +94,6 @@ func sqlHandler(w http.ResponseWriter, r *http.Request) {
 	showDatabases(w)
 
 	selectTable(r, "daily")
-
-	// read environment values
-	getEnv(r)
 
 	// spreadsheetのclientを取得
 	sheetService, err := getSheetClient(r)
