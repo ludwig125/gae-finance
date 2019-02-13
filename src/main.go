@@ -52,16 +52,7 @@ type dailyStockPrice struct {
 // cloudsql
 var db *sql.DB
 
-type dbInfo struct {
-	connectionName string
-	user           string
-	password       string
-}
-
 func main() {
-	// 環境変数を最初に読み込み
-	getEnv(r)
-
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", indexHandlerDaily)
 	http.HandleFunc("/calc_daily", indexHandlerCalcDaily)
@@ -80,13 +71,20 @@ func sqlHandler(w http.ResponseWriter, r *http.Request) {
 	// GAE log
 	ctx := appengine.NewContext(r)
 
+	// 環境変数を最初に読み込み
+	getEnv(r)
+
+	print(r)
+
 	log.Infof(ctx, "appengine.IsDevAppServer: %v", appengine.IsDevAppServer())
-	var dbinfo dbInfo
-	dbinfo.connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
-	dbinfo.user = mustGetenv(r, "CLOUDSQL_USER")
-	dbinfo.password = os.Getenv("CLOUDSQL_PASSWORD")
+	var (
+		user           = mustGetenv(r, "CLOUDSQL_USER")
+		password       = os.Getenv("CLOUDSQL_PASSWORD")
+		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
+	)
+
 	var err error
-	db, err = dialSql(dbinfo)
+	db, err = dialSql(user, password, connectionName)
 	if err != nil {
 		log.Errorf(ctx, "Could not open db: %v", err)
 	}
@@ -114,17 +112,19 @@ func mustGetenv(r *http.Request, k string) string {
 	v := os.Getenv(k)
 	if v == "" {
 		log.Errorf(ctx, "%s environment variable not set.", k)
+		os.Exit(0)
 	}
+	log.Infof(ctx, "%s environment variable set.", k)
 	return v
 }
 
-func dialSql(d dbInfo) (*sql.DB, error) {
+func dialSql(user string, password string, connectionName string) (*sql.DB, error) {
 	if appengine.IsDevAppServer() {
+		// DB名を指定しない時は以下のように/のみにする
 		//return sql.Open("mysql", "root@/")
 		return sql.Open("mysql", "root@/stockprice")
 	}
-	//return sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/", d.user, d.password, d.connectionName))
-	return sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/stockprice", d.user, d.password, d.connectionName))
+	return sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/stockprice", user, password, connectionName))
 }
 
 func showDatabases(w http.ResponseWriter) {
@@ -177,6 +177,8 @@ func selectTable(r *http.Request, table string) {
 	for i := range values {
 		scanArgs[i] = &values[i]
 	}
+
+	// select結果を詰める入れ物
 	retVals := make([]interface{}, 0)
 
 	// Fetch rows
@@ -189,18 +191,13 @@ func selectTable(r *http.Request, table string) {
 
 		// Now do something with the data.
 		// Here we just print each column as a string.
-		var value string
-		for i, col := range values {
+		for _, col := range values {
 			// Here we can check if the value is nil (NULL value)
 			if col == nil {
-				value = "NULL"
+				retVals = append(retVals, "")
 			} else {
 				retVals = append(retVals, string(col))
-				//何故かopenの前に改行が入っていたので削除
-				//value = strings.Replace(string(col), "\n", "", -1)
-				//retVals = append(retVals, value)
 			}
-			log.Infof(ctx, "%v : %v", columns[i], value)
 		}
 	}
 	if err = rows.Err(); err != nil {
@@ -214,6 +211,7 @@ func insertDailyPrice(r *http.Request, table string, resp [][]interface{}) {
 
 	// insert対象を組み立てる
 	// TODO: +=の文字列結合は遅いので改良する
+	// TODO: 項目指定しなくてすむように汎用化する https://qiita.com/hironobu_s/items/6af7dd739b7aa9453dd5
 	ins := ""
 	for _, v := range resp {
 		log.Infof(ctx, "%v", v)
@@ -531,58 +529,19 @@ var (
 
 func getEnv(r *http.Request) {
 	ctx := appengine.NewContext(r)
-	// sheetIdを環境変数から読み込む
+	// 環境変数から読み込む
 
-	// CODE_SHEETID
-	if v := os.Getenv("CODE_SHEETID"); v != "" {
-		CODE_SHEETID = v
-		log.Infof(ctx, "Succeeded to get codes sheetId.")
-	} else {
-		log.Errorf(ctx, "Failed to get codes sheetId. '%v'", v)
+	CODE_SHEETID = mustGetenv(r, "CODE_SHEETID")
+	DAILYPRICE_SHEETID = mustGetenv(r, "DAILYPRICE_SHEETID")
+	ENV = mustGetenv(r, "ENV")
+	if ENV != "test" && ENV != "prod" {
+		// ENVがprodでもtestでもない場合は異常終了
+		log.Errorf(ctx, "ENV must be 'test' or 'prod': %v", ENV)
 		os.Exit(0)
 	}
+	HOLIDAY_SHEETID = mustGetenv(r, "HOLIDAY_SHEETID")
+	STOCKPRICE_SHEETID = mustGetenv(r, "STOCKPRICE_SHEETID")
 
-	// DAILYPRICE_SHEETID
-	if v := os.Getenv("DAILYPRICE_SHEETID"); v != "" {
-		DAILYPRICE_SHEETID = v
-		log.Infof(ctx, "Succeeded to get dailyprice sheetId.")
-	} else {
-		log.Errorf(ctx, "Failed to get dailyprice sheetId. '%v'", v)
-		os.Exit(0)
-	}
-
-	// ENV
-	if v := os.Getenv("ENV"); v != "" {
-		ENV = v
-		if ENV != "test" && ENV != "prod" {
-			// ENVがprodでもtestでもない場合は異常終了
-			log.Errorf(ctx, "ENV must be 'test' or 'prod': %v", ENV)
-			os.Exit(0)
-		}
-		log.Infof(ctx, "Succeeded to get env.")
-	} else {
-		log.Errorf(ctx, "Failed to get ENV. '%v'", v)
-		os.Exit(0)
-	}
-
-	// HOLIDAY_SHEETID
-	if v := os.Getenv("HOLIDAY_SHEETID"); v != "" {
-		HOLIDAY_SHEETID = v
-		log.Infof(ctx, "Succeeded to get holiday sheetId.")
-	} else {
-		log.Errorf(ctx, "Failed to get holiday sheetId. '%v'", v)
-		os.Exit(0)
-	}
-
-	// STOCKPRICE_SHEETID
-	// sheetIdを環境変数から読み込む
-	if v := os.Getenv("STOCKPRICE_SHEETID"); v != "" {
-		STOCKPRICE_SHEETID = v
-		log.Infof(ctx, "Succeeded to get stockprice sheetId.")
-	} else {
-		log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
-		os.Exit(0)
-	}
 }
 
 // spreadsheets clientを取得
