@@ -35,19 +35,19 @@ type codeRate struct {
 	Rate []float64
 }
 
-// フォーマットは以下に依存
-// https://www.nikkei.com/nkd/company/history/dprice/?scode=7203&ba=1
-// 銘柄 日付 始値 高値 安値 終値 売買高 修正後終値
-type dailyStockPrice struct {
-	code     string
-	date     string
-	open     string
-	high     string
-	low      string
-	close    string
-	turnover string
-	modified string
-}
+//// フォーマットは以下に依存
+//// https://www.nikkei.com/nkd/company/history/dprice/?scode=7203&ba=1
+//// 銘柄 日付 始値 高値 安値 終値 売買高 修正後終値
+//type dailyStockPrice struct {
+//	code     string
+//	date     string
+//	open     string
+//	high     string
+//	low      string
+//	close    string
+//	turnover string
+//	modified string
+//}
 
 // cloudsql
 var db *sql.DB
@@ -58,6 +58,7 @@ func main() {
 	http.HandleFunc("/calc_daily", indexHandlerCalcDaily)
 	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/sql", sqlHandler)
+	http.HandleFunc("/daily_to_sql", dailyToSqlHandler)
 	appengine.Main() // Starts the server to receive requests
 }
 
@@ -65,6 +66,43 @@ func main() {
 func start(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
 	log.Infof(c, "STARTING")
+}
+
+func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	// 環境変数を最初に読み込み
+	getEnv(r)
+
+	log.Infof(ctx, "appengine.IsDevAppServer: %v", appengine.IsDevAppServer())
+	var (
+		user           = mustGetenv(r, "CLOUDSQL_USER")
+		password       = os.Getenv("CLOUDSQL_PASSWORD")
+		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
+	)
+
+	var err error
+	db, err = dialSql(user, password, connectionName)
+	if err != nil {
+		log.Errorf(ctx, "Could not open db: %v", err)
+	}
+	log.Infof(ctx, "Succeded to open db")
+
+	// spreadsheetのclientを取得
+	sheetService, err := getSheetClient(r)
+	if err != nil {
+		log.Errorf(ctx, "err: %v", err)
+		os.Exit(0)
+	}
+	// spreadsheetからdailypriceを取得
+	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
+	if resp == nil {
+		log.Errorf(ctx, "failed to fetch sheetdata: '%v'", resp)
+		os.Exit(0)
+	}
+	// dailypriceをcloudsqlに挿入
+	insertDailyPrice(r, "daily", resp)
 }
 
 func sqlHandler(w http.ResponseWriter, r *http.Request) {
@@ -88,23 +126,23 @@ func sqlHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Errorf(ctx, "Could not open db: %v", err)
 	}
-	log.Infof(ctx, "Succeded to open db")
+	log.Infof(ctx, "succeded to open db")
 	showDatabases(w)
 
-	selectTable(r, "daily")
-
-	// spreadsheetのclientを取得
-	sheetService, err := getSheetClient(r)
-	if err != nil {
-		log.Errorf(ctx, "err: %v", err)
-		os.Exit(0)
-	}
-	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
-	if resp == nil {
-		log.Errorf(ctx, "failed to fetch sheetdata: '%v'", resp)
-		os.Exit(0)
-	}
-	insertDailyPrice(r, "daily", resp)
+	//	selectTable(r, "daily")
+	//
+	//	// spreadsheetのclientを取得
+	//	sheetService, err := getSheetClient(r)
+	//	if err != nil {
+	//		log.Errorf(ctx, "err: %v", err)
+	//		os.Exit(0)
+	//	}
+	//	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
+	//	if resp == nil {
+	//		log.Errorf(ctx, "failed to fetch sheetdata: '%v'", resp)
+	//		os.Exit(0)
+	//	}
+	//	insertDailyPrice(r, "daily", resp)
 }
 
 func mustGetenv(r *http.Request, k string) string {
@@ -214,20 +252,21 @@ func insertDailyPrice(r *http.Request, table string, resp [][]interface{}) {
 	// TODO: 項目指定しなくてすむように汎用化する https://qiita.com/hironobu_s/items/6af7dd739b7aa9453dd5
 	ins := ""
 	for _, v := range resp {
-		log.Infof(ctx, "%v", v)
+		//log.Infof(ctx, "%v", v)
 		ins += fmt.Sprintf("(%s, %s, %s, %s, %s, %s, %s, %s),", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7])
 	}
 	// 末尾の,を除去
 	ins = strings.TrimRight(ins, ",")
 
+	log.Infof(ctx, "trying to insert %d dailyprice", len(resp))
 	// INSERT IGNORE INTO daily (code, date, open, high, low, close, turnover, modified) VALUES (...), (),
 	query := fmt.Sprintf("INSERT IGNORE INTO daily (code, date, open, high, low, close, turnover, modified) VALUES %s;", ins)
-	log.Infof(ctx, "%s", query)
 	rows, err := db.Query(query)
 	if err != nil {
-		log.Errorf(ctx, "failed to insert table: %s, err: %v", table, err)
+		log.Errorf(ctx, "failed to insert table: %s, err: %v, query: %v", table, err, query)
 		return
 	}
+	log.Infof(ctx, "succeded to insert dailyprice")
 	defer rows.Close()
 }
 
