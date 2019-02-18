@@ -28,3 +28,4 @@ env_variables:
   CLOUDSQL_USER: root
   include:
   - cloudsql_secret.yaml
+  MAX_SQL_INSERT: 1000
