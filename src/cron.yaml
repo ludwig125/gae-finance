@@ -13,5 +13,5 @@ cron:
 #  timezone: Asia/Tokyo
 - description: "insert stockprice daily into cloud sql from spreadsheet"
   url: /daily_to_sql
-  schedule: every saturday 04:00
+  schedule: every day 04:00
   timezone: Asia/Tokyo
