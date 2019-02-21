@@ -25,6 +25,6 @@ env_variables:
   # cloud sql
   CLOUDSQL_CONNECTION_NAME: "myfinance-01:asia-northeast1:myfinance"
   CLOUDSQL_USER: root
-  #include:
-  #- cloudsql_secret.yaml
   MAX_SQL_INSERT: 10
+#includes:
+#- cloudsql_secret.yaml

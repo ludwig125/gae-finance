@@ -76,16 +76,25 @@ func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
 	getEnv(r)
 
 	log.Infof(ctx, "appengine.IsDevAppServer: %v", appengine.IsDevAppServer())
+	p := ""
+	if !appengine.IsDevAppServer() {
+		// prod環境ならPASSWORD必須
+		log.Infof(ctx, "this is prod. trying to fetch CLOUDSQL_PASSWORD")
+		p = mustGetenv(r, "CLOUDSQL_PASSWORD")
+	}
 	var (
 		user           = mustGetenv(r, "CLOUDSQL_USER")
-		password       = os.Getenv("CLOUDSQL_PASSWORD")
+		password       = p
 		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
 	)
+	// 色々したあとに環境変数の読み込みに失敗するのは嫌なのでここで取得しておく
+	MAX_SQL_INSERT, _ := strconv.Atoi(mustGetenv(r, "MAX_SQL_INSERT"))
 
 	var err error
 	db, err = dialSql(user, password, connectionName)
 	if err != nil {
 		log.Errorf(ctx, "Could not open db: %v", err)
+		os.Exit(0)
 	}
 	log.Infof(ctx, "Succeded to open db")
 
@@ -103,10 +112,8 @@ func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// MAX_SQL_INSERT件数ごとにsqlに書き込む
-	MAX_SQL_INSERT, _ := strconv.Atoi(mustGetenv(r, "MAX_SQL_INSERT"))
 	length := len(resp)
-	begin := 0
-	for {
+	for begin := 0; begin < length; begin += MAX_SQL_INSERT {
 		// 最初に書き込むレコードは 0〜MAX_SQL_INSERT-1
 		// 次に書き込むレコードは MAX_SQL_INSERT〜 MAX_SQL_INSERT+MAX_SQL_INSERT-1
 		end := begin + MAX_SQL_INSERT
@@ -118,17 +125,29 @@ func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
 
 		// dailypriceをcloudsqlに挿入
 		insertDailyPrice(r, "daily", resp[begin:end])
-
-		// 始点をずらす
-		begin += MAX_SQL_INSERT
-
-		// 終点がデータ全体の長さと一致したら終了
-		if end == length {
-			break
-		}
 	}
-	//// dailypriceをcloudsqlに挿入
-	//insertDailyPrice(r, "daily", resp)
+	//begin := 0
+	//for {
+	//	// 最初に書き込むレコードは 0〜MAX_SQL_INSERT-1
+	//	// 次に書き込むレコードは MAX_SQL_INSERT〜 MAX_SQL_INSERT+MAX_SQL_INSERT-1
+	//	end := begin + MAX_SQL_INSERT
+
+	//	// endがデータ全体の長さを上回る場合は調節
+	//	if end >= length {
+	//		end = length
+	//	}
+
+	//	// dailypriceをcloudsqlに挿入
+	//	insertDailyPrice(r, "daily", resp[begin:end])
+
+	//	// 始点をずらす
+	//	begin += MAX_SQL_INSERT
+
+	//	// 終点がデータ全体の長さと一致したら終了
+	//	if end == length {
+	//		break
+	//	}
+	//}
 }
 
 func sqlHandler(w http.ResponseWriter, r *http.Request) {
