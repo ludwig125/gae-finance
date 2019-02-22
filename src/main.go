@@ -298,7 +298,7 @@ func insertDailyPrice(r *http.Request, table string, resp [][]interface{}) {
 	ins := ""
 	for _, v := range resp {
 		//log.Infof(ctx, "%v", v)
-		ins += fmt.Sprintf("(%s, %s, %s, %s, %s, %s, %s, %s),", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7])
+		ins += fmt.Sprintf("('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'),", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7])
 	}
 	// 末尾の,を除去
 	ins = strings.TrimRight(ins, ",")
@@ -306,6 +306,7 @@ func insertDailyPrice(r *http.Request, table string, resp [][]interface{}) {
 	log.Infof(ctx, "trying to insert %d dailyprice", len(resp))
 	// INSERT IGNORE INTO daily (code, date, open, high, low, close, turnover, modified) VALUES (...), (),
 	query := fmt.Sprintf("INSERT IGNORE INTO daily (code, date, open, high, low, close, turnover, modified) VALUES %s;", ins)
+	log.Debugf(ctx, "query: %v", query)
 	rows, err := db.Query(query)
 	if err != nil {
 		log.Errorf(ctx, "failed to insert table: %s, err: %v, query: %v", table, err, query)
