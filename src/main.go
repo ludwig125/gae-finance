@@ -50,7 +50,7 @@ type codeRate struct {
 //}
 
 // cloudsql
-var db *sql.DB
+//var db *sql.DB
 
 func main() {
 	http.HandleFunc("/_ah/start", start)
@@ -88,10 +88,14 @@ func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
 		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
 	)
 	// 色々したあとに環境変数の読み込みに失敗するのは嫌なのでここで取得しておく
-	MAX_SQL_INSERT, _ := strconv.Atoi(mustGetenv(r, "MAX_SQL_INSERT"))
+	MAX_SQL_INSERT, err := strconv.Atoi(mustGetenv(r, "MAX_SQL_INSERT"))
+	if err != nil {
+		log.Errorf(ctx, "failed to get MAX_SQL_INSERT. err: %v", err)
+		os.Exit(0)
+	}
 
-	var err error
-	db, err = dialSql(user, password, connectionName)
+	// cloud sql(ローカルの場合はmysql)と接続
+	db, err := dialSql(user, password, connectionName)
 	if err != nil {
 		log.Errorf(ctx, "Could not open db: %v", err)
 		os.Exit(0)
@@ -124,7 +128,7 @@ func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// dailypriceをcloudsqlに挿入
-		insertDailyPrice(r, "daily", resp[begin:end])
+		insertDailyPrice(r, db, "daily", resp[begin:end])
 	}
 }
 
@@ -144,15 +148,15 @@ func sqlHandler(w http.ResponseWriter, r *http.Request) {
 		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
 	)
 
-	var err error
-	db, err = dialSql(user, password, connectionName)
+	//var err error
+	db, err := dialSql(user, password, connectionName)
 	if err != nil {
 		log.Errorf(ctx, "Could not open db: %v", err)
 	}
 	log.Infof(ctx, "succeded to open db")
-	showDatabases(w)
+	showDatabases(w, db)
 
-	//	selectTable(r, "daily")
+	//	selectTable(r, db, "daily")
 	//
 	//	// spreadsheetのclientを取得
 	//	sheetService, err := getSheetClient(r)
@@ -165,7 +169,7 @@ func sqlHandler(w http.ResponseWriter, r *http.Request) {
 	//		log.Errorf(ctx, "failed to fetch sheetdata: '%v'", resp)
 	//		os.Exit(0)
 	//	}
-	//	insertDailyPrice(r, "daily", resp)
+	//	insertDailyPrice(r, db, "daily", resp)
 }
 
 func mustGetenv(r *http.Request, k string) string {
@@ -188,7 +192,7 @@ func dialSql(user string, password string, connectionName string) (*sql.DB, erro
 	return sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/stockprice", user, password, connectionName))
 }
 
-func showDatabases(w http.ResponseWriter) {
+func showDatabases(w http.ResponseWriter, db *sql.DB) {
 	w.Header().Set("Content-Type", "text/plain")
 
 	rows, err := db.Query("SHOW DATABASES")
@@ -211,7 +215,7 @@ func showDatabases(w http.ResponseWriter) {
 	w.Write(buf.Bytes())
 }
 
-func selectTable(r *http.Request, table string) {
+func selectTable(r *http.Request, db *sql.DB, table string) {
 	ctx := appengine.NewContext(r)
 
 	// テーブル名にplaceholder "?" は使えないらしいのでここで組み立て
@@ -267,7 +271,7 @@ func selectTable(r *http.Request, table string) {
 	log.Infof(ctx, "%v", retVals)
 }
 
-func insertDailyPrice(r *http.Request, table string, resp [][]interface{}) {
+func insertDailyPrice(r *http.Request, db *sql.DB, table string, resp [][]interface{}) {
 	ctx := appengine.NewContext(r)
 
 	// insert対象を組み立てる
@@ -301,6 +305,14 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	// read environment values
 	getEnv(r)
 
+	// 100件ずつ(test環境は10件)スクレイピングしてSheetに書き込み
+	// 最初に環境変数を読み込む
+	MAX_SHEET_INSERT, err := strconv.Atoi(mustGetenv(r, "MAX_SHEET_INSERT"))
+	if err != nil {
+		log.Errorf(ctx, "failed to get MAX_SHEET_INSERT. err: %v", err)
+		os.Exit(0)
+	}
+
 	// spreadsheetのclientを取得
 	sheetService, err := getSheetClient(r)
 	if err != nil {
@@ -323,15 +335,16 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 
 	// 重複書き込みをしないように既存のデータに目印をつける
 	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
+	if resp == nil {
+		log.Errorf(ctx, "failed to fetch sheetdata: '%v'", resp)
+		os.Exit(0)
+	}
 	existData := map[string]bool{}
 	for _, v := range resp {
 		// codeと日付の組をmapに登録
 		cd := fmt.Sprintf("%s %s", v[0], v[1])
 		existData[cd] = true
 	}
-
-	// 10件ずつスクレイピングしてSheetに書き込み
-	MAX_SHEET_INSERT := 10
 
 	// 書き込み対象の件数
 	target := 0
