@@ -1,13 +1,17 @@
 cron:
-- description: "stockprice hourly"
-  url: /
-  schedule: every 60 minutes from 09:25 to 15:25
-  timezone: Asia/Tokyo
+#- description: "stockprice hourly"
+#  url: /
+#  schedule: every 60 minutes from 09:25 to 15:25
+#  timezone: Asia/Tokyo
 - description: "stockprice daily"
   url: /daily
   schedule: every day 02:00
   timezone: Asia/Tokyo
-- description: "calculate stockprice daily rate"
-  url: /calc_daily
+#- description: "calculate stockprice daily rate"
+#  url: /calc_daily
+#  schedule: every day 04:00
+#  timezone: Asia/Tokyo
+- description: "insert stockprice daily into cloud sql from spreadsheet"
+  url: /daily_to_sql
   schedule: every day 04:00
   timezone: Asia/Tokyo

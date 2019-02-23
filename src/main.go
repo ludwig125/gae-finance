@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -18,9 +19,11 @@ import (
 	"google.golang.org/appengine" // Required external App Engine library
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/urlfetch" // 外部にhttpするため
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
-// codeごとの株価
+// codeごとの株価 スクレイピングした時のcode毎のデータがPriceに入る
 type codePrice struct {
 	Code  string
 	Price []string
@@ -32,11 +35,30 @@ type codeRate struct {
 	Rate []float64
 }
 
+//// フォーマットは以下に依存
+//// https://www.nikkei.com/nkd/company/history/dprice/?scode=7203&ba=1
+//// 銘柄 日付 始値 高値 安値 終値 売買高 修正後終値
+//type dailyStockPrice struct {
+//	code     string
+//	date     string
+//	open     string
+//	high     string
+//	low      string
+//	close    string
+//	turnover string
+//	modified string
+//}
+
+// cloudsql
+var db *sql.DB
+
 func main() {
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", indexHandlerDaily)
 	http.HandleFunc("/calc_daily", indexHandlerCalcDaily)
 	http.HandleFunc("/", indexHandler)
+	http.HandleFunc("/sql", sqlHandler)
+	http.HandleFunc("/daily_to_sql", dailyToSqlHandler)
 	appengine.Main() // Starts the server to receive requests
 }
 
@@ -44,6 +66,232 @@ func main() {
 func start(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
 	log.Infof(c, "STARTING")
+}
+
+func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	// 環境変数を最初に読み込み
+	getEnv(r)
+
+	log.Infof(ctx, "appengine.IsDevAppServer: %v", appengine.IsDevAppServer())
+	p := ""
+	if !appengine.IsDevAppServer() {
+		// prod環境ならPASSWORD必須
+		log.Infof(ctx, "this is prod. trying to fetch CLOUDSQL_PASSWORD")
+		p = mustGetenv(r, "CLOUDSQL_PASSWORD")
+	}
+	var (
+		user           = mustGetenv(r, "CLOUDSQL_USER")
+		password       = p
+		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
+	)
+	// 色々したあとに環境変数の読み込みに失敗するのは嫌なのでここで取得しておく
+	MAX_SQL_INSERT, _ := strconv.Atoi(mustGetenv(r, "MAX_SQL_INSERT"))
+
+	var err error
+	db, err = dialSql(user, password, connectionName)
+	if err != nil {
+		log.Errorf(ctx, "Could not open db: %v", err)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "Succeded to open db")
+
+	// spreadsheetのclientを取得
+	sheetService, err := getSheetClient(r)
+	if err != nil {
+		log.Errorf(ctx, "err: %v", err)
+		os.Exit(0)
+	}
+	// spreadsheetからdailypriceを取得
+	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
+	if resp == nil {
+		log.Errorf(ctx, "failed to fetch sheetdata: '%v'", resp)
+		os.Exit(0)
+	}
+
+	// MAX_SQL_INSERT件数ごとにsqlに書き込む
+	length := len(resp)
+	for begin := 0; begin < length; begin += MAX_SQL_INSERT {
+		// 最初に書き込むレコードは 0〜MAX_SQL_INSERT-1
+		// 次に書き込むレコードは MAX_SQL_INSERT〜 MAX_SQL_INSERT+MAX_SQL_INSERT-1
+		end := begin + MAX_SQL_INSERT
+
+		// endがデータ全体の長さを上回る場合は調節
+		if end >= length {
+			end = length
+		}
+
+		// dailypriceをcloudsqlに挿入
+		insertDailyPrice(r, "daily", resp[begin:end])
+	}
+}
+
+func sqlHandler(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	// 環境変数を最初に読み込み
+	getEnv(r)
+
+	print(r)
+
+	log.Infof(ctx, "appengine.IsDevAppServer: %v", appengine.IsDevAppServer())
+	var (
+		user           = mustGetenv(r, "CLOUDSQL_USER")
+		password       = os.Getenv("CLOUDSQL_PASSWORD")
+		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
+	)
+
+	var err error
+	db, err = dialSql(user, password, connectionName)
+	if err != nil {
+		log.Errorf(ctx, "Could not open db: %v", err)
+	}
+	log.Infof(ctx, "succeded to open db")
+	showDatabases(w)
+
+	//	selectTable(r, "daily")
+	//
+	//	// spreadsheetのclientを取得
+	//	sheetService, err := getSheetClient(r)
+	//	if err != nil {
+	//		log.Errorf(ctx, "err: %v", err)
+	//		os.Exit(0)
+	//	}
+	//	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
+	//	if resp == nil {
+	//		log.Errorf(ctx, "failed to fetch sheetdata: '%v'", resp)
+	//		os.Exit(0)
+	//	}
+	//	insertDailyPrice(r, "daily", resp)
+}
+
+func mustGetenv(r *http.Request, k string) string {
+	ctx := appengine.NewContext(r)
+	v := os.Getenv(k)
+	if v == "" {
+		log.Errorf(ctx, "%s environment variable not set.", k)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "%s environment variable set.", k)
+	return v
+}
+
+func dialSql(user string, password string, connectionName string) (*sql.DB, error) {
+	if appengine.IsDevAppServer() {
+		// DB名を指定しない時は以下のように/のみにする
+		//return sql.Open("mysql", "root@/")
+		return sql.Open("mysql", "root@/stockprice")
+	}
+	return sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/stockprice", user, password, connectionName))
+}
+
+func showDatabases(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/plain")
+
+	rows, err := db.Query("SHOW DATABASES")
+	if err != nil {
+		// ここあとでGAE用のログに変える
+		http.Error(w, fmt.Sprintf("Could not query db: %v", err), 500)
+		return
+	}
+	defer rows.Close()
+
+	buf := bytes.NewBufferString("Databases:\n")
+	for rows.Next() {
+		var dbName string
+		if err := rows.Scan(&dbName); err != nil {
+			http.Error(w, fmt.Sprintf("Could not scan result: %v", err), 500)
+			return
+		}
+		fmt.Fprintf(buf, "- %s\n", dbName)
+	}
+	w.Write(buf.Bytes())
+}
+
+func selectTable(r *http.Request, table string) {
+	ctx := appengine.NewContext(r)
+
+	// テーブル名にplaceholder "?" は使えないらしいのでここで組み立て
+	q := fmt.Sprintf("SELECT * FROM %s", table)
+	rows, err := db.Query(q)
+	if err != nil {
+		log.Errorf(ctx, "failed to select table: %s, err: %v", table, err)
+		return
+	}
+	defer rows.Close()
+
+	// 参考：https://github.com/go-sql-driver/mysql/wiki/Examples
+	// テーブルから列名を取得する
+	columns, err := rows.Columns()
+	if err != nil {
+		log.Errorf(ctx, fmt.Sprintf("failed to get columns: %v", err))
+	}
+
+	// rows.Scan は引数として'[]interface{}'が必要なので,
+	// この引数scanArgsに列のサイズだけ確保した変数の参照をコピー
+	// See http://code.google.com/p/go-wiki/wiki/InterfaceSlice for details
+	values := make([]sql.RawBytes, len(columns))
+	scanArgs := make([]interface{}, len(values))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	// select結果を詰める入れ物
+	retVals := make([]interface{}, 0)
+
+	// Fetch rows
+	for rows.Next() {
+		// get RawBytes from data
+		err = rows.Scan(scanArgs...)
+		if err != nil {
+			log.Errorf(ctx, "failed to scan: %v", err)
+		}
+
+		// Now do something with the data.
+		// Here we just print each column as a string.
+		for _, col := range values {
+			// Here we can check if the value is nil (NULL value)
+			if col == nil {
+				retVals = append(retVals, "")
+			} else {
+				retVals = append(retVals, string(col))
+			}
+		}
+	}
+	if err = rows.Err(); err != nil {
+		log.Errorf(ctx, "row error: %v", err)
+	}
+	log.Infof(ctx, "%v", retVals)
+}
+
+func insertDailyPrice(r *http.Request, table string, resp [][]interface{}) {
+	ctx := appengine.NewContext(r)
+
+	// insert対象を組み立てる
+	// TODO: +=の文字列結合は遅いので改良する
+	// TODO: 項目指定しなくてすむように汎用化する https://qiita.com/hironobu_s/items/6af7dd739b7aa9453dd5
+	ins := ""
+	for _, v := range resp {
+		//log.Infof(ctx, "%v", v)
+		ins += fmt.Sprintf("('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'),", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7])
+	}
+	// 末尾の,を除去
+	ins = strings.TrimRight(ins, ",")
+
+	log.Infof(ctx, "trying to insert %d dailyprice", len(resp))
+	// INSERT IGNORE INTO daily (code, date, open, high, low, close, turnover, modified) VALUES (...), (),
+	query := fmt.Sprintf("INSERT IGNORE INTO daily (code, date, open, high, low, close, turnover, modified) VALUES %s;", ins)
+	log.Debugf(ctx, "query: %v", query)
+	rows, err := db.Query(query)
+	if err != nil {
+		log.Errorf(ctx, "failed to insert table: %s, err: %v, query: %v", table, err, query)
+		return
+	}
+	log.Infof(ctx, "succeded to insert dailyprice")
+	defer rows.Close()
 }
 
 func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
@@ -344,58 +592,19 @@ var (
 
 func getEnv(r *http.Request) {
 	ctx := appengine.NewContext(r)
-	// sheetIdを環境変数から読み込む
+	// 環境変数から読み込む
 
-	// CODE_SHEETID
-	if v := os.Getenv("CODE_SHEETID"); v != "" {
-		CODE_SHEETID = v
-		log.Infof(ctx, "Succeeded to get codes sheetId.")
-	} else {
-		log.Errorf(ctx, "Failed to get codes sheetId. '%v'", v)
+	CODE_SHEETID = mustGetenv(r, "CODE_SHEETID")
+	DAILYPRICE_SHEETID = mustGetenv(r, "DAILYPRICE_SHEETID")
+	ENV = mustGetenv(r, "ENV")
+	if ENV != "test" && ENV != "prod" {
+		// ENVがprodでもtestでもない場合は異常終了
+		log.Errorf(ctx, "ENV must be 'test' or 'prod': %v", ENV)
 		os.Exit(0)
 	}
+	HOLIDAY_SHEETID = mustGetenv(r, "HOLIDAY_SHEETID")
+	STOCKPRICE_SHEETID = mustGetenv(r, "STOCKPRICE_SHEETID")
 
-	// DAILYPRICE_SHEETID
-	if v := os.Getenv("DAILYPRICE_SHEETID"); v != "" {
-		DAILYPRICE_SHEETID = v
-		log.Infof(ctx, "Succeeded to get dailyprice sheetId.")
-	} else {
-		log.Errorf(ctx, "Failed to get dailyprice sheetId. '%v'", v)
-		os.Exit(0)
-	}
-
-	// ENV
-	if v := os.Getenv("ENV"); v != "" {
-		ENV = v
-		if ENV != "test" && ENV != "prod" {
-			// ENVがprodでもtestでもない場合は異常終了
-			log.Errorf(ctx, "ENV must be 'test' or 'prod': %v", ENV)
-			os.Exit(0)
-		}
-		log.Infof(ctx, "Succeeded to get env.")
-	} else {
-		log.Errorf(ctx, "Failed to get ENV. '%v'", v)
-		os.Exit(0)
-	}
-
-	// HOLIDAY_SHEETID
-	if v := os.Getenv("HOLIDAY_SHEETID"); v != "" {
-		HOLIDAY_SHEETID = v
-		log.Infof(ctx, "Succeeded to get holiday sheetId.")
-	} else {
-		log.Errorf(ctx, "Failed to get holiday sheetId. '%v'", v)
-		os.Exit(0)
-	}
-
-	// STOCKPRICE_SHEETID
-	// sheetIdを環境変数から読み込む
-	if v := os.Getenv("STOCKPRICE_SHEETID"); v != "" {
-		STOCKPRICE_SHEETID = v
-		log.Infof(ctx, "Succeeded to get stockprice sheetId.")
-	} else {
-		log.Errorf(ctx, "Failed to get stockprice sheetId. '%v'", v)
-		os.Exit(0)
-	}
 }
 
 // spreadsheets clientを取得
