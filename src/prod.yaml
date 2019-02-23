@@ -22,6 +22,7 @@ env_variables:
   STOCKPRICE_SHEETID: "1FcwyVrMIZ5xGrFaJvIg0SVpJPsf9Q7WabVxBXRxpUZA"
   RATE_SHEETID: "1ZQK1SdjLS0ZCrKL_0A2jrbG-nxEcf-h4UIDgXAXCfMM"
   DAILYRATE_SHEETID: "14rZ4HXGsr1tEejPO_SngOu1llAwqO6gUcKeygZa4FbA"
+  MAX_SHEET_INSERT: 100
 
   # cloud sql
   CLOUDSQL_CONNECTION_NAME: "myfinance-01:asia-northeast1:myfinance"
