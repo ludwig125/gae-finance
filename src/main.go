@@ -337,10 +337,12 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	target := 0
 	// 書き込めた件数
 	inserted := 0
-	for begin := 0; begin < len(codes); begin += MAX_SHEET_INSERT {
+
+	length := len(codes)
+	for begin := 0; begin < length; begin += MAX_SHEET_INSERT {
 		end := begin + MAX_SHEET_INSERT
-		if end >= len(codes) {
-			end = len(codes)
+		if end >= length {
+			end = length
 		}
 		partial := codes[begin:end]
 		tar, ins := scrapeAndWrite(r, partial, sheetService, existData)
