@@ -126,28 +126,6 @@ func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
 		// dailypriceをcloudsqlに挿入
 		insertDailyPrice(r, "daily", resp[begin:end])
 	}
-	//begin := 0
-	//for {
-	//	// 最初に書き込むレコードは 0〜MAX_SQL_INSERT-1
-	//	// 次に書き込むレコードは MAX_SQL_INSERT〜 MAX_SQL_INSERT+MAX_SQL_INSERT-1
-	//	end := begin + MAX_SQL_INSERT
-
-	//	// endがデータ全体の長さを上回る場合は調節
-	//	if end >= length {
-	//		end = length
-	//	}
-
-	//	// dailypriceをcloudsqlに挿入
-	//	insertDailyPrice(r, "daily", resp[begin:end])
-
-	//	// 始点をずらす
-	//	begin += MAX_SQL_INSERT
-
-	//	// 終点がデータ全体の長さと一致したら終了
-	//	if end == length {
-	//		break
-	//	}
-	//}
 }
 
 func sqlHandler(w http.ResponseWriter, r *http.Request) {
