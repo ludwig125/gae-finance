@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"google.golang.org/appengine" // Required external App Engine library
 	"google.golang.org/appengine/log"
-	"net/http"
 
 	_ "github.com/go-sql-driver/mysql"
 )
