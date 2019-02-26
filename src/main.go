@@ -2,9 +2,7 @@ package main
 
 import (
 	"bytes"
-	"database/sql"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"regexp"
@@ -14,13 +12,10 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"golang.org/x/oauth2/google"
 	"google.golang.org/api/sheets/v4"
 	"google.golang.org/appengine" // Required external App Engine library
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/urlfetch" // 外部にhttpするため
-
-	_ "github.com/go-sql-driver/mysql"
 )
 
 // codeごとの株価 スクレイピングした時のcode毎のデータがPriceに入る
@@ -35,29 +30,11 @@ type codeRate struct {
 	Rate []float64
 }
 
-//// フォーマットは以下に依存
-//// https://www.nikkei.com/nkd/company/history/dprice/?scode=7203&ba=1
-//// 銘柄 日付 始値 高値 安値 終値 売買高 修正後終値
-//type dailyStockPrice struct {
-//	code     string
-//	date     string
-//	open     string
-//	high     string
-//	low      string
-//	close    string
-//	turnover string
-//	modified string
-//}
-
-// cloudsql
-//var db *sql.DB
-
 func main() {
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", indexHandlerDaily)
 	http.HandleFunc("/calc_daily", indexHandlerCalcDaily)
 	http.HandleFunc("/", indexHandler)
-	http.HandleFunc("/sql", sqlHandler)
 	http.HandleFunc("/daily_to_sql", dailyToSqlHandler)
 	appengine.Main() // Starts the server to receive requests
 }
@@ -132,46 +109,6 @@ func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func sqlHandler(w http.ResponseWriter, r *http.Request) {
-	// GAE log
-	ctx := appengine.NewContext(r)
-
-	// 環境変数を最初に読み込み
-	getEnv(r)
-
-	print(r)
-
-	log.Infof(ctx, "appengine.IsDevAppServer: %v", appengine.IsDevAppServer())
-	var (
-		user           = mustGetenv(r, "CLOUDSQL_USER")
-		password       = os.Getenv("CLOUDSQL_PASSWORD")
-		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
-	)
-
-	//var err error
-	db, err := dialSql(user, password, connectionName)
-	if err != nil {
-		log.Errorf(ctx, "Could not open db: %v", err)
-	}
-	log.Infof(ctx, "succeded to open db")
-	showDatabases(w, db)
-
-	//	selectTable(r, db, "daily")
-	//
-	//	// spreadsheetのclientを取得
-	//	sheetService, err := getSheetClient(r)
-	//	if err != nil {
-	//		log.Errorf(ctx, "err: %v", err)
-	//		os.Exit(0)
-	//	}
-	//	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
-	//	if resp == nil {
-	//		log.Errorf(ctx, "failed to fetch sheetdata: '%v'", resp)
-	//		os.Exit(0)
-	//	}
-	//	insertDailyPrice(r, db, "daily", resp)
-}
-
 func mustGetenv(r *http.Request, k string) string {
 	ctx := appengine.NewContext(r)
 	v := os.Getenv(k)
@@ -181,121 +118,6 @@ func mustGetenv(r *http.Request, k string) string {
 	}
 	log.Infof(ctx, "%s environment variable set.", k)
 	return v
-}
-
-func dialSql(user string, password string, connectionName string) (*sql.DB, error) {
-	if appengine.IsDevAppServer() {
-		// DB名を指定しない時は以下のように/のみにする
-		//return sql.Open("mysql", "root@/")
-		return sql.Open("mysql", "root@/stockprice")
-	}
-	return sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/stockprice", user, password, connectionName))
-}
-
-func showDatabases(w http.ResponseWriter, db *sql.DB) {
-	w.Header().Set("Content-Type", "text/plain")
-
-	rows, err := db.Query("SHOW DATABASES")
-	if err != nil {
-		// ここあとでGAE用のログに変える
-		http.Error(w, fmt.Sprintf("Could not query db: %v", err), 500)
-		return
-	}
-	defer rows.Close()
-
-	buf := bytes.NewBufferString("Databases:\n")
-	for rows.Next() {
-		var dbName string
-		if err := rows.Scan(&dbName); err != nil {
-			http.Error(w, fmt.Sprintf("Could not scan result: %v", err), 500)
-			return
-		}
-		fmt.Fprintf(buf, "- %s\n", dbName)
-	}
-	w.Write(buf.Bytes())
-}
-
-func selectTable(r *http.Request, db *sql.DB, table string) {
-	ctx := appengine.NewContext(r)
-
-	// テーブル名にplaceholder "?" は使えないらしいのでここで組み立て
-	q := fmt.Sprintf("SELECT * FROM %s", table)
-	rows, err := db.Query(q)
-	if err != nil {
-		log.Errorf(ctx, "failed to select table: %s, err: %v", table, err)
-		return
-	}
-	defer rows.Close()
-
-	// 参考：https://github.com/go-sql-driver/mysql/wiki/Examples
-	// テーブルから列名を取得する
-	columns, err := rows.Columns()
-	if err != nil {
-		log.Errorf(ctx, fmt.Sprintf("failed to get columns: %v", err))
-	}
-
-	// rows.Scan は引数として'[]interface{}'が必要なので,
-	// この引数scanArgsに列のサイズだけ確保した変数の参照をコピー
-	// See http://code.google.com/p/go-wiki/wiki/InterfaceSlice for details
-	values := make([]sql.RawBytes, len(columns))
-	scanArgs := make([]interface{}, len(values))
-	for i := range values {
-		scanArgs[i] = &values[i]
-	}
-
-	// select結果を詰める入れ物
-	retVals := make([]interface{}, 0)
-
-	// Fetch rows
-	for rows.Next() {
-		// get RawBytes from data
-		err = rows.Scan(scanArgs...)
-		if err != nil {
-			log.Errorf(ctx, "failed to scan: %v", err)
-		}
-
-		// Now do something with the data.
-		// Here we just print each column as a string.
-		for _, col := range values {
-			// Here we can check if the value is nil (NULL value)
-			if col == nil {
-				retVals = append(retVals, "")
-			} else {
-				retVals = append(retVals, string(col))
-			}
-		}
-	}
-	if err = rows.Err(); err != nil {
-		log.Errorf(ctx, "row error: %v", err)
-	}
-	log.Infof(ctx, "%v", retVals)
-}
-
-func insertDailyPrice(r *http.Request, db *sql.DB, table string, resp [][]interface{}) {
-	ctx := appengine.NewContext(r)
-
-	// insert対象を組み立てる
-	// TODO: +=の文字列結合は遅いので改良する
-	// TODO: 項目指定しなくてすむように汎用化する https://qiita.com/hironobu_s/items/6af7dd739b7aa9453dd5
-	ins := ""
-	for _, v := range resp {
-		//log.Infof(ctx, "%v", v)
-		ins += fmt.Sprintf("('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'),", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7])
-	}
-	// 末尾の,を除去
-	ins = strings.TrimRight(ins, ",")
-
-	log.Infof(ctx, "trying to insert %d dailyprice", len(resp))
-	// INSERT IGNORE INTO daily (code, date, open, high, low, close, turnover, modified) VALUES (...), (),
-	query := fmt.Sprintf("INSERT IGNORE INTO daily (code, date, open, high, low, close, turnover, modified) VALUES %s;", ins)
-	log.Debugf(ctx, "query: %v", query)
-	rows, err := db.Query(query)
-	if err != nil {
-		log.Errorf(ctx, "failed to insert table: %s, err: %v, query: %v", table, err, query)
-		return
-	}
-	log.Infof(ctx, "succeded to insert dailyprice")
-	defer rows.Close()
 }
 
 func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
@@ -363,11 +185,12 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 		inserted += ins
 	}
 
-	log.Infof(ctx, "succeded to write all records. target: %d, inserted: %d", target, inserted)
+	log.Infof(ctx, "wrote records done. target: %d, inserted: %d", target, inserted)
 	if target != inserted {
 		log.Errorf(ctx, "failed to write all records. target: %d, inserted: %d", target, inserted)
 		os.Exit(0)
 	}
+	log.Infof(ctx, "succeded to write all records.")
 }
 
 func scrapeAndWrite(r *http.Request, codes [][]interface{}, s *sheets.Service, existData map[string]bool) (int, int) {
@@ -472,10 +295,10 @@ func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
 	//fmt.Fprintln(w, whole_codeRate)
 
 	// 事前にrateのシートをclear
-	clearSheet(sheetService, r, "DAILYRATE_SHEETID", "daily_rate")
+	clearSheet(sheetService, r, DAILYRATE_SHEETID, "daily_rate")
 
 	// 株価の比率順にソートしたものを書き込み
-	writeRate(sheetService, r, whole_codeRate, "DAILYRATE_SHEETID", "daily_rate")
+	writeRate(sheetService, r, whole_codeRate, DAILYRATE_SHEETID, "daily_rate")
 }
 
 func codeDateModprice(r *http.Request, resp [][]interface{}) [][]interface{} {
@@ -568,29 +391,10 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, whole_codeRate)
 
 	// 事前にrateのシートをclear
-	clearSheet(sheetService, r, "RATE_SHEETID", "rate")
+	clearSheet(sheetService, r, RATE_SHEETID, "rate")
 
 	// 株価の比率順にソートしたものを書き込み
-	writeRate(sheetService, r, whole_codeRate, "RATE_SHEETID", "rate")
-}
-
-func getClientWithJson(r *http.Request) *http.Client {
-	// リクエストからcontextを作成
-	// GAE log
-	ctx := appengine.NewContext(r)
-
-	credentialFilePath := "myfinance-01-dc1116b8f354.json"
-	data, err := ioutil.ReadFile(credentialFilePath)
-	if err != nil {
-		log.Errorf(ctx, "Unable to read client secret file: %v", err)
-		os.Exit(0)
-	}
-	conf, err := google.JWTConfigFromJSON(data, "https://www.googleapis.com/auth/spreadsheets")
-	if err != nil {
-		log.Errorf(ctx, "Unable to parse client secret file to config: %v", err)
-		os.Exit(0)
-	}
-	return conf.Client(ctx)
+	writeRate(sheetService, r, whole_codeRate, RATE_SHEETID, "rate")
 }
 
 var (
@@ -599,6 +403,8 @@ var (
 	ENV                string
 	HOLIDAY_SHEETID    string
 	STOCKPRICE_SHEETID string
+	DAILYRATE_SHEETID  string
+	RATE_SHEETID       string
 )
 
 func getEnv(r *http.Request) {
@@ -615,19 +421,9 @@ func getEnv(r *http.Request) {
 	}
 	HOLIDAY_SHEETID = mustGetenv(r, "HOLIDAY_SHEETID")
 	STOCKPRICE_SHEETID = mustGetenv(r, "STOCKPRICE_SHEETID")
+	DAILYRATE_SHEETID = mustGetenv(r, "DAILYRATE_SHEETID")
+	RATE_SHEETID = mustGetenv(r, "RATE_SHEETID")
 
-}
-
-// spreadsheets clientを取得
-func getSheetClient(r *http.Request) (*sheets.Service, error) {
-	// googleAPIへのclientをリクエストから作成
-	client := getClientWithJson(r)
-	// spreadsheets clientを取得
-	srv, err := sheets.New(client)
-	if err != nil {
-		return nil, fmt.Errorf("unable to retrieve Sheets Client %v", err)
-	}
-	return srv, nil
 }
 
 func isBussinessday(srv *sheets.Service, r *http.Request) bool {
@@ -982,35 +778,6 @@ func writeStockprice(srv *sheets.Service, r *http.Request, code string, date str
 	}
 }
 
-func getSheetData(r *http.Request, srv *sheets.Service, sheetId string, readRange string) [][]interface{} {
-	ctx := appengine.NewContext(r)
-
-	var MaxRetries = 3
-	attempt := 0
-	for {
-		// MaxRetries を超えていたらnilを返す
-		if attempt >= MaxRetries {
-			log.Errorf(ctx, "Failed to retrieve data from sheet. attempt: %d. reached MaxRetries!", attempt)
-			return nil
-		}
-		attempt = attempt + 1
-		// stockpriceシートからデータを取得
-		resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
-		if err != nil {
-			log.Warningf(ctx, "Unable to retrieve data from sheet: %v. attempt: %d", err, attempt)
-			time.Sleep(1 * time.Second) // 1秒待つ
-			continue
-		}
-		status := resp.ServerResponse.HTTPStatusCode
-		if status != 200 {
-			log.Warningf(ctx, "HTTPstatus error: %v. attempt: %d", status, attempt)
-			time.Sleep(1 * time.Second) // 1秒待つ
-			continue
-		}
-		return resp.Values
-	}
-}
-
 func calcIncreaseRate(resp [][]interface{}, code string, num int, r *http.Request) ([]float64, error) {
 	ctx := appengine.NewContext(r)
 
@@ -1058,76 +825,4 @@ func calcIncreaseRate(resp [][]interface{}, code string, num int, r *http.Reques
 	}
 	// rate ex. [1.0007303534910896 1.002781030444965 1.0013154048523822 0.997379531227253 1.0011690778898146 1.0011690778898146]
 	return rate, nil
-}
-
-func clearSheet(srv *sheets.Service, r *http.Request, sid string, sname string) {
-	ctx := appengine.NewContext(r)
-
-	sheetId := ""
-	// sheetIdを環境変数から読み込む
-	if v := os.Getenv(sid); v != "" {
-		sheetId = v
-	} else {
-		log.Errorf(ctx, "Failed to get price rate sheetId. '%v'", v)
-		os.Exit(0)
-	}
-	writeRange := sname
-
-	// clear stockprice rate spreadsheet:
-	resp, err := srv.Spreadsheets.Values.Clear(sheetId, writeRange, &sheets.ClearValuesRequest{}).Do()
-	if err != nil {
-		log.Errorf(ctx, "Unable to clear value. %v", err)
-		return
-	}
-	status := resp.ServerResponse.HTTPStatusCode
-	if status != 200 {
-		log.Errorf(ctx, "HTTPstatus error. %v", status)
-		return
-	}
-}
-
-func writeRate(srv *sheets.Service, r *http.Request, rate []codeRate, sid string, sname string) {
-	ctx := appengine.NewContext(r)
-
-	sheetId := ""
-	// sheetIdを環境変数から読み込む
-	if v := os.Getenv(sid); v != "" {
-		sheetId = v
-	} else {
-		log.Errorf(ctx, "Failed to get price rate sheetId. '%v'", v)
-		os.Exit(0)
-	}
-	writeRange := sname
-
-	// spreadsheetに書き込み対象の行列を作成
-	matrix := make([][]interface{}, len(rate))
-	// 株価の比率順にソートしたものを書き込み
-	//for i, r := range rate {
-	//matrix[i] = []interface{}{r.Code, r.Rate[0], r.Rate[1], r.Rate[2], r.Rate[3], r.Rate[4], r.Rate[5]}
-	//}
-	for _, r := range rate {
-		m := make([]interface{}, 0)
-		m = append(m, r.Code)
-		// Rateの個数だけ書き込み
-		for i := 0; i < len(r.Rate); i++ {
-			m = append(m, r.Rate[i])
-		}
-		matrix = append(matrix, m)
-	}
-
-	valueRange := &sheets.ValueRange{
-		MajorDimension: "ROWS",
-		Values:         matrix,
-	}
-	// Write stockprice rate spreadsheet:
-	resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
-	if err != nil {
-		log.Errorf(ctx, "Unable to write value. %v", err)
-		return
-	}
-	status := resp.ServerResponse.HTTPStatusCode
-	if status != 200 {
-		log.Errorf(ctx, "HTTPstatus error. %v", status)
-		return
-	}
 }
