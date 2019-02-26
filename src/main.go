@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"regexp"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"golang.org/x/oauth2/google"
 	"google.golang.org/api/sheets/v4"
 	"google.golang.org/appengine" // Required external App Engine library
 	"google.golang.org/appengine/log"
@@ -397,25 +395,6 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 株価の比率順にソートしたものを書き込み
 	writeRate(sheetService, r, whole_codeRate, RATE_SHEETID, "rate")
-}
-
-func getClientWithJson(r *http.Request) *http.Client {
-	// リクエストからcontextを作成
-	// GAE log
-	ctx := appengine.NewContext(r)
-
-	credentialFilePath := "myfinance-01-dc1116b8f354.json"
-	data, err := ioutil.ReadFile(credentialFilePath)
-	if err != nil {
-		log.Errorf(ctx, "Unable to read client secret file: %v", err)
-		os.Exit(0)
-	}
-	conf, err := google.JWTConfigFromJSON(data, "https://www.googleapis.com/auth/spreadsheets")
-	if err != nil {
-		log.Errorf(ctx, "Unable to parse client secret file to config: %v", err)
-		os.Exit(0)
-	}
-	return conf.Client(ctx)
 }
 
 var (
