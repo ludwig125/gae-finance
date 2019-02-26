@@ -187,11 +187,12 @@ func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 		inserted += ins
 	}
 
-	log.Infof(ctx, "succeded to write all records. target: %d, inserted: %d", target, inserted)
+	log.Infof(ctx, "wrote records done. target: %d, inserted: %d", target, inserted)
 	if target != inserted {
 		log.Errorf(ctx, "failed to write all records. target: %d, inserted: %d", target, inserted)
 		os.Exit(0)
 	}
+	log.Infof(ctx, "succeded to write all records.")
 }
 
 func scrapeAndWrite(r *http.Request, codes [][]interface{}, s *sheets.Service, existData map[string]bool) (int, int) {
@@ -445,18 +446,6 @@ func getEnv(r *http.Request) {
 	RATE_SHEETID = mustGetenv(r, "RATE_SHEETID")
 
 }
-
-//// spreadsheets clientを取得
-//func getSheetClient(r *http.Request) (*sheets.Service, error) {
-//	// googleAPIへのclientをリクエストから作成
-//	client := getClientWithJson(r)
-//	// spreadsheets clientを取得
-//	srv, err := sheets.New(client)
-//	if err != nil {
-//		return nil, fmt.Errorf("unable to retrieve Sheets Client %v", err)
-//	}
-//	return srv, nil
-//}
 
 func isBussinessday(srv *sheets.Service, r *http.Request) bool {
 	ctx := appengine.NewContext(r)
@@ -810,35 +799,6 @@ func writeStockprice(srv *sheets.Service, r *http.Request, code string, date str
 	}
 }
 
-//func getSheetData(r *http.Request, srv *sheets.Service, sheetId string, readRange string) [][]interface{} {
-//	ctx := appengine.NewContext(r)
-//
-//	var MaxRetries = 3
-//	attempt := 0
-//	for {
-//		// MaxRetries を超えていたらnilを返す
-//		if attempt >= MaxRetries {
-//			log.Errorf(ctx, "Failed to retrieve data from sheet. attempt: %d. reached MaxRetries!", attempt)
-//			return nil
-//		}
-//		attempt = attempt + 1
-//		// stockpriceシートからデータを取得
-//		resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
-//		if err != nil {
-//			log.Warningf(ctx, "Unable to retrieve data from sheet: %v. attempt: %d", err, attempt)
-//			time.Sleep(1 * time.Second) // 1秒待つ
-//			continue
-//		}
-//		status := resp.ServerResponse.HTTPStatusCode
-//		if status != 200 {
-//			log.Warningf(ctx, "HTTPstatus error: %v. attempt: %d", status, attempt)
-//			time.Sleep(1 * time.Second) // 1秒待つ
-//			continue
-//		}
-//		return resp.Values
-//	}
-//}
-
 func calcIncreaseRate(resp [][]interface{}, code string, num int, r *http.Request) ([]float64, error) {
 	ctx := appengine.NewContext(r)
 
@@ -887,75 +847,3 @@ func calcIncreaseRate(resp [][]interface{}, code string, num int, r *http.Reques
 	// rate ex. [1.0007303534910896 1.002781030444965 1.0013154048523822 0.997379531227253 1.0011690778898146 1.0011690778898146]
 	return rate, nil
 }
-
-//func clearSheet(srv *sheets.Service, r *http.Request, sid string, sname string) {
-//	ctx := appengine.NewContext(r)
-//
-//	sheetId := ""
-//	// sheetIdを環境変数から読み込む
-//	if v := os.Getenv(sid); v != "" {
-//		sheetId = v
-//	} else {
-//		log.Errorf(ctx, "Failed to get price rate sheetId. '%v'", v)
-//		os.Exit(0)
-//	}
-//	writeRange := sname
-//
-//	// clear stockprice rate spreadsheet:
-//	resp, err := srv.Spreadsheets.Values.Clear(sheetId, writeRange, &sheets.ClearValuesRequest{}).Do()
-//	if err != nil {
-//		log.Errorf(ctx, "Unable to clear value. %v", err)
-//		return
-//	}
-//	status := resp.ServerResponse.HTTPStatusCode
-//	if status != 200 {
-//		log.Errorf(ctx, "HTTPstatus error. %v", status)
-//		return
-//	}
-//}
-
-//func writeRate(srv *sheets.Service, r *http.Request, rate []codeRate, sid string, sname string) {
-//	ctx := appengine.NewContext(r)
-//
-//	sheetId := ""
-//	// sheetIdを環境変数から読み込む
-//	if v := os.Getenv(sid); v != "" {
-//		sheetId = v
-//	} else {
-//		log.Errorf(ctx, "Failed to get price rate sheetId. '%v'", v)
-//		os.Exit(0)
-//	}
-//	writeRange := sname
-//
-//	// spreadsheetに書き込み対象の行列を作成
-//	matrix := make([][]interface{}, len(rate))
-//	// 株価の比率順にソートしたものを書き込み
-//	//for i, r := range rate {
-//	//matrix[i] = []interface{}{r.Code, r.Rate[0], r.Rate[1], r.Rate[2], r.Rate[3], r.Rate[4], r.Rate[5]}
-//	//}
-//	for _, r := range rate {
-//		m := make([]interface{}, 0)
-//		m = append(m, r.Code)
-//		// Rateの個数だけ書き込み
-//		for i := 0; i < len(r.Rate); i++ {
-//			m = append(m, r.Rate[i])
-//		}
-//		matrix = append(matrix, m)
-//	}
-//
-//	valueRange := &sheets.ValueRange{
-//		MajorDimension: "ROWS",
-//		Values:         matrix,
-//	}
-//	// Write stockprice rate spreadsheet:
-//	resp, err := srv.Spreadsheets.Values.Append(sheetId, writeRange, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
-//	if err != nil {
-//		log.Errorf(ctx, "Unable to write value. %v", err)
-//		return
-//	}
-//	status := resp.ServerResponse.HTTPStatusCode
-//	if status != 200 {
-//		log.Errorf(ctx, "HTTPstatus error. %v", status)
-//		return
-//	}
-//}
