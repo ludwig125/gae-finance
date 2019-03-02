@@ -717,31 +717,27 @@ func writeStockpriceDaily(r *http.Request, srv *sheets.Service, prices []codePri
 	target_num := len(matrix)
 	log.Infof(ctx, "insert target num: %v", target_num)
 
-	var MaxRetries = 3
-	attempt := 0
-	for {
-		// MaxRetries を超えていたら終了
-		if attempt >= MaxRetries {
-			log.Errorf(ctx, "Failed to retrieve data from sheet. attempt: %d", attempt)
-			// 書き込み対象の件数と成功した件数
-			return target_num, 0
-		}
-		attempt = attempt + 1
+	var MaxRetries = 5
+	for attempt := 0; attempt < MaxRetries; attempt++ {
 		resp, err := srv.Spreadsheets.Values.Append(DAILYPRICE_SHEETID, "daily", valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
 		if err != nil {
-			log.Warningf(ctx, "Unable to write value. %v. attempt: %d", err, attempt)
+			log.Warningf(ctx, "failed to write spreadsheet. error: %v. attempt: %d", err, attempt+1)
 			time.Sleep(3 * time.Second) // 3秒待つ
 			continue
 		}
 		status := resp.ServerResponse.HTTPStatusCode
 		if status != 200 {
-			log.Warningf(ctx, "HTTPstatus error. %v. attempt: %d", status, attempt)
+			log.Warningf(ctx, "HTTPstatus error. %v. attempt: %d", status, attempt+1)
 			time.Sleep(3 * time.Second) // 3秒待つ
 			continue
 		}
 		// 書き込み対象の件数と成功した件数
+		log.Debugf(ctx, "succeded to write data to sheet.")
 		return target_num, target_num
 	}
+	// 書き込み対象の件数と成功した件数(=0)
+	log.Errorf(ctx, "failed to write data to sheet. reached to MaxRetries: %d", MaxRetries)
+	return target_num, 0
 }
 
 func writeStockprice(srv *sheets.Service, r *http.Request, code string, date string, stockprice string) {
@@ -754,28 +750,22 @@ func writeStockprice(srv *sheets.Service, r *http.Request, code string, date str
 		},
 	}
 	var MaxRetries = 3
-	attempt := 0
-	for {
-		// MaxRetries を超えていたら終了
-		if attempt >= MaxRetries {
-			log.Errorf(ctx, "Failed to retrieve data from sheet. attempt: %d", attempt)
-			return
-		}
-		attempt = attempt + 1
+	for attempt := 0; attempt < MaxRetries; attempt++ {
 		resp, err := srv.Spreadsheets.Values.Append(STOCKPRICE_SHEETID, "stockprice", valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
 		if err != nil {
 			log.Warningf(ctx, "Unable to write value. %v. attempt: %d", err, attempt)
-			time.Sleep(1 * time.Second) // 1秒待つ
+			time.Sleep(3 * time.Second) // 3秒待つ
 			continue
 		}
 		status := resp.ServerResponse.HTTPStatusCode
 		if status != 200 {
 			log.Warningf(ctx, "HTTPstatus error. %v. attempt: %d", status, attempt)
-			time.Sleep(1 * time.Second) // 1秒待つ
+			time.Sleep(3 * time.Second) // 3秒待つ
 			continue
 		}
 		return
 	}
+	log.Errorf(ctx, "Failed to write data to sheet. reached to MaxRetries: %d", MaxRetries)
 }
 
 func calcIncreaseRate(resp [][]interface{}, code string, num int, r *http.Request) ([]float64, error) {
