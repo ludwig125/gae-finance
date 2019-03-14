@@ -15,3 +15,7 @@ cron:
   url: /daily_to_sql
   schedule: every day 04:00
   timezone: Asia/Tokyo
+- description: "delete daily sheet data, after confirming db"
+  url: /delete_sheet
+  schedule: every day 06:00
+  timezone: Asia/Tokyo

@@ -13,7 +13,21 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
-func dialSql(user string, password string, connectionName string) (*sql.DB, error) {
+func dialSql(r *http.Request) (*sql.DB, error) {
+	ctx := appengine.NewContext(r)
+
+	p := ""
+	if !appengine.IsDevAppServer() {
+		// prod環境ならPASSWORD必須
+		log.Infof(ctx, "this is prod. trying to fetch CLOUDSQL_PASSWORD")
+		p = mustGetenv(r, "CLOUDSQL_PASSWORD")
+	}
+	var (
+		user           = mustGetenv(r, "CLOUDSQL_USER")
+		password       = p
+		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
+	)
+
 	if appengine.IsDevAppServer() {
 		// DB名を指定しない時は以下のように/のみにする
 		//return sql.Open("mysql", "root@/")
@@ -72,15 +86,15 @@ func showDatabases(w http.ResponseWriter, db *sql.DB) {
 	w.Write(buf.Bytes())
 }
 
-func selectTable(r *http.Request, db *sql.DB, table string) {
+func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
 	ctx := appengine.NewContext(r)
 
-	// テーブル名にplaceholder "?" は使えないらしいのでここで組み立て
-	q := fmt.Sprintf("SELECT * FROM %s", table)
+	//	// テーブル名にplaceholder "?" は使えないらしいのでここで組み立て
+	//	q := fmt.Sprintf("SELECT * FROM %s", table)
 	rows, err := db.Query(q)
 	if err != nil {
-		log.Errorf(ctx, "failed to select table: %s, err: %v", table, err)
-		return
+		log.Errorf(ctx, "failed to select. query: [%s], err: %v", q, err)
+		return nil
 	}
 	defer rows.Close()
 
@@ -125,5 +139,6 @@ func selectTable(r *http.Request, db *sql.DB, table string) {
 	if err = rows.Err(); err != nil {
 		log.Errorf(ctx, "row error: %v", err)
 	}
-	log.Infof(ctx, "%v", retVals)
+	//log.Infof(ctx, "%v", retVals)
+	return retVals
 }
