@@ -164,6 +164,7 @@ func deleteSheetHandler(w http.ResponseWriter, r *http.Request) {
 			log.Errorf(ctx, "failed to fetch sheetdata. err: '%v'.", sheetRet)
 			os.Exit(0)
 		}
+		log.Infof(ctx, "number of sheet data %d", len(sheetRet))
 
 		sheetCodesMap := map[int]bool{}
 		log.Infof(ctx, "fetch code from spreadsheet. target date: '%s'", previousBussinessDay)
