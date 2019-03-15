@@ -33,7 +33,8 @@ type codeRate struct {
 func main() {
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", indexHandlerDaily)
-	http.HandleFunc("/calc_daily", indexHandlerCalcDaily)
+	//http.HandleFunc("/calc_daily", indexHandlerCalcDailyOld)
+	http.HandleFunc("/calc_daily", calcDailyHandler)
 	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/daily_to_sql", dailyToSqlHandler)
 	http.HandleFunc("/delete_sheet", deleteSheetHandler)
@@ -390,67 +391,107 @@ func getEachCodesPrices(r *http.Request, codes [][]interface{}) []codePrice {
 	return prices
 }
 
-func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
+func calcDailyHandler(w http.ResponseWriter, r *http.Request) {
 	// GAE log
 	ctx := appengine.NewContext(r)
 
-	// read environment values
-	getEnv(r)
+	// TODO: 休日には動かないようにあとでする
+	//	// read environment values
+	//	getEnv(r)
+	//	// spreadsheetのclientを取得
+	//	sheetService, err := getSheetClient(r)
+	//	if err != nil {
+	//		log.Errorf(ctx, "err: %v", err)
+	//		os.Exit(0)
+	//	}
+	//	if !isBussinessday(sheetService, r) {
+	//		log.Infof(ctx, "Is not a business day today.")
+	//		return
+	//	}
 
-	// spreadsheetのclientを取得
-	sheetService, err := getSheetClient(r)
+	// cloud sql(ローカルの場合はmysql)と接続
+	db, err := dialSql(r)
 	if err != nil {
-		log.Errorf(ctx, "err: %v", err)
+		log.Errorf(ctx, "Could not open db: %v", err)
 		os.Exit(0)
 	}
+	log.Infof(ctx, "Succeded to open db")
 
-	if !isBussinessday(sheetService, r) {
-		log.Infof(ctx, "Is not a business day today.")
-		return
+	query := fmt.Sprintf("SELECT date, close from daily where code = '%s'", "8214")
+	log.Infof(ctx, "select query: %s", query)
+	dbRet := selectTable(r, db, query)
+	if dbRet == nil {
+		log.Errorf(ctx, "selectTable failed")
+		os.Exit(0)
 	}
-
-	// spreadsheetから銘柄コードを取得
-	//codes := readCode(sheetService, r, "ichibu")
-	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
-	if codes == nil || len(codes) == 0 {
-		log.Infof(ctx, "No target data.")
-		return
+	//log.Infof(ctx, "db %v", dbRet)
+	for i, v := range dbRet {
+		//code, _ := strconv.Atoi(v.(string)) // int型に変換
+		log.Infof(ctx, "i %d code %v", i, v.(string))
 	}
-
-	// spreadsheetから株価を取得する
-	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
-	if resp == nil {
-		log.Infof(ctx, "No data")
-		return
-	}
-
-	cdmp := codeDateModprice(r, resp)
-	//log.Infof(ctx, "%v\n", cdmp)
-
-	// 全codeの株価比率
-	var whole_codeRate []codeRate
-	for _, row := range codes {
-		code := row[0].(string)
-		//直近7日間の増減率を取得する
-		rate, err := calcIncreaseRate(cdmp, code, 7, r)
-		if err != nil {
-			log.Warningf(ctx, "%v\n", err)
-			continue
-		}
-		whole_codeRate = append(whole_codeRate, codeRate{code, rate})
-	}
-	log.Infof(ctx, "count whole code %v\n", len(whole_codeRate))
-
-	// 一つ前との比率が一番大きいもの順にソート
-	sort.SliceStable(whole_codeRate, func(i, j int) bool { return whole_codeRate[i].Rate[0] > whole_codeRate[j].Rate[0] })
-	//fmt.Fprintln(w, whole_codeRate)
-
-	// 事前にrateのシートをclear
-	clearSheet(sheetService, r, DAILYRATE_SHEETID, "daily_rate")
-
-	// 株価の比率順にソートしたものを書き込み
-	writeRate(sheetService, r, whole_codeRate, DAILYRATE_SHEETID, "daily_rate")
 }
+
+//func indexHandlerCalcDailyOld(w http.ResponseWriter, r *http.Request) {
+//	// GAE log
+//	ctx := appengine.NewContext(r)
+//
+//	// read environment values
+//	getEnv(r)
+//
+//	// spreadsheetのclientを取得
+//	sheetService, err := getSheetClient(r)
+//	if err != nil {
+//		log.Errorf(ctx, "err: %v", err)
+//		os.Exit(0)
+//	}
+//
+//	if !isBussinessday(sheetService, r) {
+//		log.Infof(ctx, "Is not a business day today.")
+//		return
+//	}
+//
+//	// spreadsheetから銘柄コードを取得
+//	//codes := readCode(sheetService, r, "ichibu")
+//	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
+//	if codes == nil || len(codes) == 0 {
+//		log.Infof(ctx, "No target data.")
+//		return
+//	}
+//
+//	// spreadsheetから株価を取得する
+//	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
+//	if resp == nil {
+//		log.Infof(ctx, "No data")
+//		return
+//	}
+//
+//	cdmp := codeDateModprice(r, resp)
+//	//log.Infof(ctx, "%v\n", cdmp)
+//
+//	// 全codeの株価比率
+//	var whole_codeRate []codeRate
+//	for _, row := range codes {
+//		code := row[0].(string)
+//		//直近7日間の増減率を取得する
+//		rate, err := calcIncreaseRate(cdmp, code, 7, r)
+//		if err != nil {
+//			log.Warningf(ctx, "%v\n", err)
+//			continue
+//		}
+//		whole_codeRate = append(whole_codeRate, codeRate{code, rate})
+//	}
+//	log.Infof(ctx, "count whole code %v\n", len(whole_codeRate))
+//
+//	// 一つ前との比率が一番大きいもの順にソート
+//	sort.SliceStable(whole_codeRate, func(i, j int) bool { return whole_codeRate[i].Rate[0] > whole_codeRate[j].Rate[0] })
+//	//fmt.Fprintln(w, whole_codeRate)
+//
+//	// 事前にrateのシートをclear
+//	clearSheet(sheetService, r, DAILYRATE_SHEETID, "daily_rate")
+//
+//	// 株価の比率順にソートしたものを書き込み
+//	writeRate(sheetService, r, whole_codeRate, DAILYRATE_SHEETID, "daily_rate")
+//}
 
 func codeDateModprice(r *http.Request, resp [][]interface{}) [][]interface{} {
 	//ctx := appengine.NewContext(r)
