@@ -36,6 +36,7 @@ func main() {
 	http.HandleFunc("/calc_daily", indexHandlerCalcDaily)
 	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/daily_to_sql", dailyToSqlHandler)
+	http.HandleFunc("/delete_sheet", deleteSheetHandler)
 	appengine.Main() // Starts the server to receive requests
 }
 
@@ -53,17 +54,6 @@ func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
 	getEnv(r)
 
 	log.Infof(ctx, "appengine.IsDevAppServer: %v", appengine.IsDevAppServer())
-	p := ""
-	if !appengine.IsDevAppServer() {
-		// prod環境ならPASSWORD必須
-		log.Infof(ctx, "this is prod. trying to fetch CLOUDSQL_PASSWORD")
-		p = mustGetenv(r, "CLOUDSQL_PASSWORD")
-	}
-	var (
-		user           = mustGetenv(r, "CLOUDSQL_USER")
-		password       = p
-		connectionName = mustGetenv(r, "CLOUDSQL_CONNECTION_NAME")
-	)
 	// 色々したあとに環境変数の読み込みに失敗するのは嫌なのでここで取得しておく
 	MAX_SQL_INSERT, err := strconv.Atoi(mustGetenv(r, "MAX_SQL_INSERT"))
 	if err != nil {
@@ -72,7 +62,7 @@ func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// cloud sql(ローカルの場合はmysql)と接続
-	db, err := dialSql(user, password, connectionName)
+	db, err := dialSql(r)
 	if err != nil {
 		log.Errorf(ctx, "Could not open db: %v", err)
 		os.Exit(0)
@@ -107,6 +97,166 @@ func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
 		// dailypriceをcloudsqlに挿入
 		insertDailyPrice(r, db, "daily", resp[begin:end])
 	}
+}
+
+// 本日分のデータがスプレッドシートとDB両方に書き込まれていたらスプレッドシートのデータを消す
+func deleteSheetHandler(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	// 環境変数を最初に読み込み
+	getEnv(r)
+
+	log.Infof(ctx, "delete daily sheet data")
+
+	// spreadsheetのclientを取得
+	sheetService, err := getSheetClient(r)
+	if err != nil {
+		log.Errorf(ctx, "err: %v", err)
+		os.Exit(0)
+	}
+
+	// 休みの日だったら起動しない
+	if !isBussinessday(sheetService, r) {
+		log.Infof(ctx, "Is not a business day today.")
+		return
+	}
+
+	// 休日データを取得
+	holidays := getHolidays(r, sheetService)
+	holidayMap := map[string]bool{}
+	for _, row := range holidays {
+		holiday := row[0].(string)
+		holidayMap[holiday] = true
+	}
+
+	// test環境のスプレッドシートデータの最新の日付に合わせる
+	previousBussinessDay := "2018/09/18"
+	// prod環境の場合は、直近の取引日を取得する
+	// 一日前から順番に見ていって、直近の休日ではない日を取引日として設定する
+	if ENV != "test" {
+		jst, _ := time.LoadLocation("Asia/Tokyo")
+		now := time.Now().In(jst)
+		// 直近の営業日を取得
+		getPreviousBussinessDay := func() string {
+			// 無限ループは嫌なので直近30日間見て取引日が見つからなかったら""を返して失敗
+			for i := 1; i <= 30; i++ {
+				previous := now.AddDate(0, 0, -i).Format("2006/01/02")
+				if !holidayMap[previous] {
+					return previous
+				}
+			}
+			return ""
+		}
+		previousBussinessDay = getPreviousBussinessDay()
+		if previousBussinessDay == "" {
+			log.Errorf(ctx, "there are no previous bussinessdays")
+			os.Exit(0)
+		}
+		log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
+	}
+
+	// あとで全銘柄と比較するためにsheetの直近の取引日のデータに含まれる銘柄を取得してmapに格納
+	codesInSheet := func() map[int]bool {
+		// spreadsheetからdailypriceを取得
+		sheetRet := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
+		if sheetRet == nil {
+			log.Errorf(ctx, "failed to fetch sheetdata. err: '%v'.", sheetRet)
+			os.Exit(0)
+		}
+
+		sheetCodesMap := map[int]bool{}
+		log.Infof(ctx, "fetch code from spreadsheet. target date: '%s'", previousBussinessDay)
+		for _, v := range sheetRet {
+			// 銘柄、日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値の配列から
+			// 日付を抜き出して、previousBussinessDayと一致したらその銘柄ID(code)を取得
+			if v[1] == previousBussinessDay {
+				code, _ := strconv.Atoi(v[0].(string)) // int型に変換
+				sheetCodesMap[code] = true
+			}
+		}
+		log.Infof(ctx, "sheetcodes %v", sheetCodesMap)
+		return sheetCodesMap
+	}
+	sheetCodesMap := codesInSheet()
+
+	// あとで全銘柄と比較するためにDBの直近の取引日のデータに含まれる銘柄を取得してmapに格納
+	codesInDb := func() map[int]bool {
+		// cloud sql(ローカルの場合はmysql)と接続
+		db, err := dialSql(r)
+		if err != nil {
+			log.Errorf(ctx, "Could not open db: %v", err)
+			os.Exit(0)
+		}
+		log.Infof(ctx, "Succeded to open db")
+
+		query := fmt.Sprintf("SELECT code from daily where date = '%s'", previousBussinessDay)
+		log.Infof(ctx, "select query: %s", query)
+		dbRet := selectTable(r, db, query)
+		if dbRet == nil {
+			log.Errorf(ctx, "selectTable failed")
+			os.Exit(0)
+		}
+		// あとで全銘柄と比較するためにmapに格納
+		dbCodesMap := map[int]bool{}
+		for _, v := range dbRet {
+			code, _ := strconv.Atoi(v.(string)) // int型に変換
+			dbCodesMap[code] = true
+		}
+		log.Infof(ctx, "dbcodes %v", dbCodesMap)
+		return dbCodesMap
+	}
+	dbCodesMap := codesInDb()
+
+	// spreadsheetから銘柄コードを取得
+	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
+	if codes == nil || len(codes) == 0 {
+		log.Errorf(ctx, "failed to fetch sheetdata. err: '%v'.", codes)
+		os.Exit(0)
+	}
+	// 全銘柄分がsheetにあるか確認する
+	var notExistInSheet []int
+	var notExistInDb []int
+	for _, v := range codes {
+		code, _ := strconv.Atoi(v[0].(string))
+		if !sheetCodesMap[code] {
+			// sheetになければnotExistInSheetにその銘柄を追加
+			notExistInSheet = append(notExistInSheet, code)
+		}
+		if !dbCodesMap[code] {
+			// dbになければnotExistInDbにその銘柄を追加
+			notExistInDb = append(notExistInDb, code)
+		}
+	}
+
+	// sheetとdbを比較
+	var notExistInDbExistInSheet []int
+	// code->boolのうちcodeを取り出す
+	for k, _ := range sheetCodesMap {
+		if !dbCodesMap[k] {
+			notExistInDbExistInSheet = append(notExistInDbExistInSheet, k)
+		}
+	}
+	f := func(from string, to string, list []int) int {
+		if len(list) != 0 {
+			log.Errorf(ctx, "failed to write all '%s' data to '%s'. unmatched!! not exist in '%s': %v", from, to, to, list)
+			return 1
+		}
+		log.Infof(ctx, "succeeded to write all '%s' data to '%s'.", from, to)
+		return 0
+	}
+	// 全銘柄のうちsheetに書き込まれていない銘柄一覧と、sheetのうちDBに書き込まれていない銘柄一覧を列挙する
+	// 全銘柄のうちDBに書き込まれていない銘柄一覧は見ない
+	// どれか一つでも駄目だったら失敗
+	// boolにすると、最初の一つが駄目だとそれ以降が判定されなくなったので、結果の和にした
+	existFailues := f("codes", "sheet", notExistInSheet) + f("sheet", "db", notExistInDbExistInSheet)
+	if existFailues != 0 {
+		log.Errorf(ctx, "failed to write all data.")
+		os.Exit(0)
+	}
+
+	// TODO: このあと実際にシートの中身を空にする処理を追加する
+
 }
 
 func mustGetenv(r *http.Request, k string) string {
@@ -448,13 +598,14 @@ func isBussinessday(srv *sheets.Service, r *http.Request) bool {
 
 	today_ymd := now.Format("2006/01/02")
 
-	// 'holiday' worksheet を読み取り
-	// 東京証券取引所の休日: https://www.jpx.co.jp/corporate/calendar/index.html
-	holidays := getSheetData(r, srv, HOLIDAY_SHEETID, "holiday")
-	if holidays == nil || len(holidays) == 0 {
-		log.Infof(ctx, "Failed to get holidays.")
-		os.Exit(0)
-	}
+	//	// 'holiday' sheet を読み取り
+	//	// 東京証券取引所の休日: https://www.jpx.co.jp/corporate/calendar/index.html
+	//	holidays := getSheetData(r, srv, HOLIDAY_SHEETID, "holiday")
+	//	if holidays == nil || len(holidays) == 0 {
+	//		log.Infof(ctx, "Failed to get holidays.")
+	//		os.Exit(0)
+	//	}
+	holidays := getHolidays(r, srv)
 	for _, row := range holidays {
 		holiday := row[0].(string)
 		if holiday == today_ymd {
@@ -464,6 +615,18 @@ func isBussinessday(srv *sheets.Service, r *http.Request) bool {
 	}
 	return true
 
+}
+
+func getHolidays(r *http.Request, srv *sheets.Service) [][]interface{} {
+	ctx := appengine.NewContext(r)
+	// 'holiday' sheet を読み取り
+	// 東京証券取引所の休日: https://www.jpx.co.jp/corporate/calendar/index.html
+	holidays := getSheetData(r, srv, HOLIDAY_SHEETID, "holiday")
+	if holidays == nil || len(holidays) == 0 {
+		log.Infof(ctx, "Failed to get holidays.")
+		os.Exit(0)
+	}
+	return holidays
 }
 
 func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
