@@ -89,8 +89,6 @@ func showDatabases(w http.ResponseWriter, db *sql.DB) {
 func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
 	ctx := appengine.NewContext(r)
 
-	//	// テーブル名にplaceholder "?" は使えないらしいのでここで組み立て
-	//	q := fmt.Sprintf("SELECT * FROM %s", table)
 	rows, err := db.Query(q)
 	if err != nil {
 		log.Errorf(ctx, "failed to select. query: [%s], err: %v", q, err)
@@ -139,6 +137,5 @@ func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
 	if err = rows.Err(); err != nil {
 		log.Errorf(ctx, "row error: %v", err)
 	}
-	//log.Infof(ctx, "%v", retVals)
 	return retVals
 }
