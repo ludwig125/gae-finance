@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"google.golang.org/appengine" // Required external App Engine library
@@ -103,10 +104,17 @@ func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
 		log.Errorf(ctx, fmt.Sprintf("failed to get columns: %v", err))
 	}
 
+	// 列の長さ分だけのvalues
+	// see https://golang.org/pkg/database/sql/#RawBytes
+	// RawBytes is a byte slice that holds a reference to memory \
+	// owned by the database itself.
+	// After a Scan into a RawBytes, \
+	// the slice is only valid until the next call to Next, Scan, or Close.
+	values := make([]sql.RawBytes, len(columns))
+
 	// rows.Scan は引数として'[]interface{}'が必要なので,
 	// この引数scanArgsに列のサイズだけ確保した変数の参照をコピー
 	// See http://code.google.com/p/go-wiki/wiki/InterfaceSlice for details
-	values := make([]sql.RawBytes, len(columns))
 	scanArgs := make([]interface{}, len(values))
 	for i := range values {
 		scanArgs[i] = &values[i]
@@ -123,8 +131,6 @@ func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
 			log.Errorf(ctx, "failed to scan: %v", err)
 		}
 
-		// Now do something with the data.
-		// Here we just print each column as a string.
 		for _, col := range values {
 			// Here we can check if the value is nil (NULL value)
 			if col == nil {
@@ -138,4 +144,17 @@ func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
 		log.Errorf(ctx, "row error: %v", err)
 	}
 	return retVals
+}
+
+// selectTableの結果を返す関数
+func fetchSelectResult(r *http.Request, db *sql.DB, q string) []interface{} {
+	// GAE log
+	ctx := appengine.NewContext(r)
+	log.Infof(ctx, "select query: %s", q)
+	dbRet := selectTable(r, db, q)
+	if dbRet == nil {
+		log.Errorf(ctx, "selectTable failed")
+		os.Exit(0)
+	}
+	return dbRet
 }

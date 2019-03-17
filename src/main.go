@@ -192,13 +192,15 @@ func deleteSheetHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Infof(ctx, "Succeded to open db")
 
-		query := fmt.Sprintf("SELECT code from daily where date = '%s'", previousBussinessDay)
-		log.Infof(ctx, "select query: %s", query)
-		dbRet := selectTable(r, db, query)
-		if dbRet == nil {
-			log.Errorf(ctx, "selectTable failed")
-			os.Exit(0)
-		}
+		query := fmt.Sprintf("SELECT code FROM daily WHERE date = '%s'", previousBussinessDay)
+		dbRet := fetchSelectResult(r, db, query)
+		//		log.Infof(ctx, "select query: %s", query)
+		//		dbRet := selectTable(r, db, query)
+		//		if dbRet == nil {
+		//			log.Errorf(ctx, "selectTable failed")
+		//			os.Exit(0)
+		//		}
+
 		// あとで全銘柄と比較するためにmapに格納
 		dbCodesMap := map[int]bool{}
 		for _, v := range dbRet {
@@ -417,17 +419,32 @@ func calcDailyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Infof(ctx, "Succeded to open db")
 
-	query := fmt.Sprintf("SELECT date, close from daily where code = '%s'", "8214")
-	log.Infof(ctx, "select query: %s", query)
-	dbRet := selectTable(r, db, query)
-	if dbRet == nil {
-		log.Errorf(ctx, "selectTable failed")
-		os.Exit(0)
+	// 最新の日付にある銘柄を取得
+	codes := fetchSelectResult(r, db,
+		"SELECT code FROM daily WHERE date = (SELECT date FROM daily ORDER BY date DESC LIMIT 1);")
+
+	// codeと、件数(指定しない場合は-1)を与えると日付と終値を日付順に返す関数
+	orderedDateClose := func(code string, limit int) []interface{} {
+		limitStr := ""
+		if limit != -1 {
+			limitStr = fmt.Sprintf("LIMIT %d", limit)
+		}
+
+		dbRet := fetchSelectResult(r, db, fmt.Sprintf(
+			"SELECT date, close FROM daily WHERE code = %s ORDER BY date %s;", code, limitStr))
+		//	var str []string
+		//	for _, v := range dbRet {
+		//		str = append(str, v.(string))
+		for i := 0; i < len(dbRet); i++ {
+			log.Infof(ctx, "%s %s", dbRet[i], dbRet[i+1])
+			i += 1
+		}
+		//log.Infof(ctx, "%v", str)
+		return dbRet
 	}
-	//log.Infof(ctx, "db %v", dbRet)
-	for i, v := range dbRet {
-		//code, _ := strconv.Atoi(v.(string)) // int型に変換
-		log.Infof(ctx, "i %d code %v", i, v.(string))
+
+	for _, v := range codes {
+		log.Infof(ctx, "date close %v", orderedDateClose(v.(string), -1))
 	}
 }
 
