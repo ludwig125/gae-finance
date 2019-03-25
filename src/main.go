@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -28,6 +29,12 @@ type codePrice struct {
 type codeRate struct {
 	Code string
 	Rate []float64
+}
+
+// 日付と終値
+type dateClose struct {
+	Date  string
+	Close int64
 }
 
 func main() {
@@ -423,28 +430,80 @@ func calcDailyHandler(w http.ResponseWriter, r *http.Request) {
 	codes := fetchSelectResult(r, db,
 		"SELECT code FROM daily WHERE date = (SELECT date FROM daily ORDER BY date DESC LIMIT 1);")
 
-	// codeと、件数(指定しない場合は-1)を与えると日付と終値を日付順に返す関数
-	orderedDateClose := func(code string, limit int) []interface{} {
+	// codeと件数(指定しない場合は0)を与えると、日付と終値の構造体を直近の日付順にして配列で返す関数
+	orderedDateClose := func(code string, limit int) []dateClose {
 		limitStr := ""
-		if limit != -1 {
+		if limit != 0 {
 			limitStr = fmt.Sprintf("LIMIT %d", limit)
 		}
 
 		dbRet := fetchSelectResult(r, db, fmt.Sprintf(
-			"SELECT date, close FROM daily WHERE code = %s ORDER BY date %s;", code, limitStr))
-		//	var str []string
-		//	for _, v := range dbRet {
-		//		str = append(str, v.(string))
-		for i := 0; i < len(dbRet); i++ {
-			log.Infof(ctx, "%s %s", dbRet[i], dbRet[i+1])
-			i += 1
+			"SELECT date, close FROM daily WHERE code = %s ORDER BY date DESC %s;", code, limitStr))
+
+		var dateCloses []dateClose
+		// 日付と終値の２つを取得
+		for i := 0; i < len(dbRet); i += 2 {
+			// int32型数値に変換
+			//c, _ := strconv.Atoi(dbRet[i+1].(string))
+			c, _ := strconv.ParseInt(dbRet[i+1].(string), 10, 64)
+			dateCloses = append(dateCloses, dateClose{Date: dbRet[i].(string), Close: c})
+			//log.Infof(ctx, "%s %s", dbRet[i], dbRet[i+1])
 		}
-		//log.Infof(ctx, "%v", str)
-		return dbRet
+		return dateCloses
 	}
 
-	for _, v := range codes {
-		log.Infof(ctx, "date close %v", orderedDateClose(v.(string), -1))
+	calcCloseRate := func(dcs []dateClose) {
+		for i := 0; i < len(dcs)-1; i++ {
+			// 前日との比率
+			log.Infof(ctx, "date %s close %d rate %f", dcs[i].Date, dcs[i].Close, float64(dcs[i].Close)/float64(dcs[i+1].Close))
+		}
+	}
+
+	for _, c := range codes {
+		//log.Infof(ctx, "date close %v", orderedDateClose(c.(string), 10))
+		dcs := orderedDateClose(c.(string), 30)
+		calcCloseRate(dcs)
+		//log.Infof(ctx, "5 day average %f", movingAverage(r, dcs))
+
+		mvAvgList := []int{5, 25}
+
+		//for _, d := range mvAvgList {
+		//	movingAverage(r, dcs, d)
+		//}
+
+		var wg sync.WaitGroup
+		wg.Add(len(mvAvgList))
+		for _, day := range mvAvgList {
+			go func(day int) {
+				defer wg.Done()
+				movingAverage(r, dcs, day)
+			}(day)
+		}
+		wg.Wait()
+	}
+}
+
+// X日移動平均線を計算する
+func movingAverage(r *http.Request, dcs []dateClose, avgDays int) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	// 与えられた日付-終値の要素数
+	length := len(dcs)
+	for date := 0; date < length; date++ {
+
+		// X日移動平均のX(avgDays)を定義
+		days := avgDays
+		// Xが残りのデータ数より多かったら残りのデータ数がdaysになる
+		if date+days > length {
+			days = length - date
+		}
+		var sum int64
+		for i := date; i < date+days; i++ {
+			sum += dcs[i].Close
+		}
+
+		log.Infof(ctx, "%d average %s %d %f", avgDays, dcs[date].Date, dcs[date].Close, float64(sum)/float64(days))
 	}
 }
 
