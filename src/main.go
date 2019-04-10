@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
+	//"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -461,25 +461,24 @@ func calcDailyHandler(w http.ResponseWriter, r *http.Request) {
 
 	for _, c := range codes {
 		//log.Infof(ctx, "date close %v", orderedDateClose(c.(string), 10))
-		dcs := orderedDateClose(c.(string), 30)
+		dcs := orderedDateClose(c.(string), 300)
 		calcCloseRate(dcs)
-		//log.Infof(ctx, "5 day average %f", movingAverage(r, dcs))
 
-		mvAvgList := []int{5, 25}
+		mvAvgList := []int{5, 20, 60, 100, 300}
 
-		//for _, d := range mvAvgList {
-		//	movingAverage(r, dcs, d)
-		//}
-
-		var wg sync.WaitGroup
-		wg.Add(len(mvAvgList))
-		for _, day := range mvAvgList {
-			go func(day int) {
-				defer wg.Done()
-				movingAverage(r, dcs, day)
-			}(day)
+		for _, d := range mvAvgList {
+			movingAverage(r, dcs, d)
 		}
-		wg.Wait()
+
+		//		var wg sync.WaitGroup
+		//		wg.Add(len(mvAvgList))
+		//		for _, day := range mvAvgList {
+		//			go func(day int) {
+		//				defer wg.Done()
+		//				movingAverage(r, dcs, day)
+		//			}(day)
+		//		}
+		//		wg.Wait()
 	}
 }
 
