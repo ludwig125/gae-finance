@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	//"sync"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -41,7 +41,7 @@ func main() {
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", indexHandlerDaily)
 	//http.HandleFunc("/calc_daily", indexHandlerCalcDailyOld)
-	http.HandleFunc("/calc_daily", calcDailyHandler)
+	http.HandleFunc("/movingavg", movingAvgHandler)
 	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/daily_to_sql", dailyToSqlHandler)
 	http.HandleFunc("/delete_sheet", deleteSheetHandler)
@@ -400,7 +400,7 @@ func getEachCodesPrices(r *http.Request, codes [][]interface{}) []codePrice {
 	return prices
 }
 
-func calcDailyHandler(w http.ResponseWriter, r *http.Request) {
+func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 	// GAE log
 	ctx := appengine.NewContext(r)
 
@@ -452,40 +452,71 @@ func calcDailyHandler(w http.ResponseWriter, r *http.Request) {
 		return dateCloses
 	}
 
-	calcCloseRate := func(dcs []dateClose) {
-		for i := 0; i < len(dcs)-1; i++ {
-			// 前日との比率
-			log.Infof(ctx, "date %s close %d rate %f", dcs[i].Date, dcs[i].Close, float64(dcs[i].Close)/float64(dcs[i+1].Close))
-		}
+	//	calcCloseRate := func(dcs []dateClose) {
+	//		for i := 0; i < len(dcs)-1; i++ {
+	//			// 前日との比率
+	//			log.Infof(ctx, "date %s close %d rate %f", dcs[i].Date, dcs[i].Close, float64(dcs[i].Close)/float64(dcs[i+1].Close))
+	//		}
+	//	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(codes))
+	for _, code := range codes {
+		go func(code string) {
+			defer wg.Done()
+			// 直近 100日分新しい順にソートして取得
+			dcs := orderedDateClose(code, 100)
+
+			// DBから取得できた日付のリスト
+			var dateList []string
+			for date := 0; date < len(dcs); date++ {
+				dateList = append(dateList, dcs[date].Date)
+			}
+
+			// 取得対象の移動平均
+			mvAvgList := []int{5, 20, 60, 100}
+			// (日付;移動平均)のMapを5, 20,...ごとに格納したMap
+			daysDateMovingMap := make(map[int]map[string]float64)
+			for _, d := range mvAvgList {
+				// 移動平均の計算
+				daysDateMovingMap[d] = movingAverage(dcs, d)
+			}
+			// 移動平均をDBに書き込み
+			insertMovingAvg(r, db, "movingavg", code, dateList, daysDateMovingMap)
+
+		}(code.(string)) // codeはinterface型なのでキャストする
 	}
-
-	for _, c := range codes {
-		//log.Infof(ctx, "date close %v", orderedDateClose(c.(string), 10))
-		dcs := orderedDateClose(c.(string), 300)
-		calcCloseRate(dcs)
-
-		mvAvgList := []int{5, 20, 60, 100, 300}
-
-		for _, d := range mvAvgList {
-			movingAverage(r, dcs, d)
-		}
-
-		//		var wg sync.WaitGroup
-		//		wg.Add(len(mvAvgList))
-		//		for _, day := range mvAvgList {
-		//			go func(day int) {
-		//				defer wg.Done()
-		//				movingAverage(r, dcs, day)
-		//			}(day)
-		//		}
-		//		wg.Wait()
-	}
+	wg.Wait()
+	//	for _, code := range codes {
+	//		// 直近 100日分最近から順にソートして取得
+	//		dcs := orderedDateClose(code.(string), 100)
+	//
+	//		// DBから取得できた日付のリスト
+	//		var dateList []string
+	//		for date := 0; date < len(dcs); date++ {
+	//			dateList = append(dateList, dcs[date].Date)
+	//		}
+	//
+	//		// 取得対象の移動平均
+	//		mvAvgList := []int{5, 20, 60, 100}
+	//		// (日付;移動平均)のMapを5, 20,...ごとに格納したMap
+	//		daysDateMovingMap := make(map[int]map[string]float64)
+	//		for _, d := range mvAvgList {
+	//			daysDateMovingMap[d] = movingAverage(dcs, d)
+	//		}
+	//		// 移動平均をDBに書き込み
+	//		insertMovingAvg(r, db, "movingavg", code.(string), dateList, daysDateMovingMap)
+	//
+	//	}
 }
 
 // X日移動平均線を計算する
-func movingAverage(r *http.Request, dcs []dateClose, avgDays int) {
-	// GAE log
-	ctx := appengine.NewContext(r)
+//func movingAverage(r *http.Request, dcs []dateClose, avgDays int) map[string]float64 {
+//	// GAE log
+//	ctx := appengine.NewContext(r)
+func movingAverage(dcs []dateClose, avgDays int) map[string]float64 {
+
+	dateMovingMap := make(map[string]float64) // 日付と移動平均のMap
 
 	// 与えられた日付-終値の要素数
 	length := len(dcs)
@@ -502,8 +533,15 @@ func movingAverage(r *http.Request, dcs []dateClose, avgDays int) {
 			sum += dcs[i].Close
 		}
 
-		log.Infof(ctx, "%d average %s %d %f", avgDays, dcs[date].Date, dcs[date].Close, float64(sum)/float64(days))
+		movingAvg := float64(sum) / float64(days)
+		dateMovingMap[dcs[date].Date] = movingAvg
+
+		//	log.Infof(ctx, "%d average %s %d %f", avgDays, dcs[date].Date, dcs[date].Close, movingAvg)
 	}
+
+	//return movingAvgList
+	//log.Infof(ctx, "%d %v", avgDays, dateMovingMap)
+	return dateMovingMap
 }
 
 //func indexHandlerCalcDailyOld(w http.ResponseWriter, r *http.Request) {
