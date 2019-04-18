@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
+	//"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -459,55 +459,60 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 	//		}
 	//	}
 
-	var wg sync.WaitGroup
-	wg.Add(len(codes))
 	for _, code := range codes {
-		go func(code string) {
-			defer wg.Done()
-			// 直近 100日分新しい順にソートして取得
-			dcs := orderedDateClose(code, 100)
+		// 直近 100日分最近から順にソートして取得
+		dcs := orderedDateClose(code.(string), 100)
 
-			// DBから取得できた日付のリスト
-			var dateList []string
-			for date := 0; date < len(dcs); date++ {
-				dateList = append(dateList, dcs[date].Date)
-			}
+		// DBから取得できた日付のリスト
+		var dateList []string
+		for date := 0; date < len(dcs); date++ {
+			dateList = append(dateList, dcs[date].Date)
+		}
+		log.Infof(ctx, "moving average target code %s, dateSize: %d, dateList: %v", code.(string), len(dateList), dateList)
 
-			// 取得対象の移動平均
-			mvAvgList := []int{5, 20, 60, 100}
-			// (日付;移動平均)のMapを5, 20,...ごとに格納したMap
-			daysDateMovingMap := make(map[int]map[string]float64)
-			for _, d := range mvAvgList {
-				// 移動平均の計算
-				daysDateMovingMap[d] = movingAverage(dcs, d)
-			}
-			// 移動平均をDBに書き込み
-			insertMovingAvg(r, db, "movingavg", code, dateList, daysDateMovingMap)
-
-		}(code.(string)) // codeはinterface型なのでキャストする
+		// 取得対象の移動平均
+		mvAvgList := []int{5, 20, 60, 100}
+		// (日付;移動平均)のMapを5, 20,...ごとに格納したMap
+		daysDateMovingMap := make(map[int]map[string]float64)
+		for _, d := range mvAvgList {
+			daysDateMovingMap[d] = movingAverage(dcs, d)
+		}
+		// 移動平均をDBに書き込み
+		insertMovingAvg(r, db, "movingavg", code.(string), dateList, daysDateMovingMap)
 	}
-	wg.Wait()
+
+	// 以下のgoroutineを実行したら以下のエラーが発生
+	// A problem was encountered with the process that handled this request, causing it to exit. This is likely to cause a new process to be used for the next request to your application. (Error code 204)
+
+	//	var wg sync.WaitGroup
+	//	wg.Add(len(codes))
 	//	for _, code := range codes {
-	//		// 直近 100日分最近から順にソートして取得
-	//		dcs := orderedDateClose(code.(string), 100)
+	//		go func(code string) {
+	//			defer wg.Done()
+	//			// 直近 100日分新しい順にソートして取得
+	//			dcs := orderedDateClose(code, 100)
 	//
-	//		// DBから取得できた日付のリスト
-	//		var dateList []string
-	//		for date := 0; date < len(dcs); date++ {
-	//			dateList = append(dateList, dcs[date].Date)
-	//		}
+	//			// DBから取得できた日付のリスト
+	//			var dateList []string
+	//			for date := 0; date < len(dcs); date++ {
+	//				dateList = append(dateList, dcs[date].Date)
+	//			}
 	//
-	//		// 取得対象の移動平均
-	//		mvAvgList := []int{5, 20, 60, 100}
-	//		// (日付;移動平均)のMapを5, 20,...ごとに格納したMap
-	//		daysDateMovingMap := make(map[int]map[string]float64)
-	//		for _, d := range mvAvgList {
-	//			daysDateMovingMap[d] = movingAverage(dcs, d)
-	//		}
-	//		// 移動平均をDBに書き込み
-	//		insertMovingAvg(r, db, "movingavg", code.(string), dateList, daysDateMovingMap)
+	//			// 取得対象の移動平均
+	//			mvAvgList := []int{5, 20, 60, 100}
+	//			// (日付;移動平均)のMapを5, 20,...ごとに格納したMap
+	//			daysDateMovingMap := make(map[int]map[string]float64)
+	//			for _, d := range mvAvgList {
+	//				// 移動平均の計算
+	//				daysDateMovingMap[d] = movingAverage(dcs, d)
+	//			}
+	//			// 移動平均をDBに書き込み
+	//			insertMovingAvg(r, db, "movingavg", code, dateList, daysDateMovingMap)
 	//
+	//		}(code.(string)) // codeはinterface型なのでキャストする
 	//	}
+	//	wg.Wait()
+
 }
 
 // X日移動平均線を計算する
