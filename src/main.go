@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	//"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -30,10 +31,17 @@ type codeRate struct {
 	Rate []float64
 }
 
+// 日付と終値
+type dateClose struct {
+	Date  string
+	Close int64
+}
+
 func main() {
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", indexHandlerDaily)
-	http.HandleFunc("/calc_daily", indexHandlerCalcDaily)
+	//http.HandleFunc("/calc_daily", indexHandlerCalcDailyOld)
+	http.HandleFunc("/movingavg", movingAvgHandler)
 	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/daily_to_sql", dailyToSqlHandler)
 	http.HandleFunc("/delete_sheet", deleteSheetHandler)
@@ -191,13 +199,15 @@ func deleteSheetHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Infof(ctx, "Succeded to open db")
 
-		query := fmt.Sprintf("SELECT code from daily where date = '%s'", previousBussinessDay)
-		log.Infof(ctx, "select query: %s", query)
-		dbRet := selectTable(r, db, query)
-		if dbRet == nil {
-			log.Errorf(ctx, "selectTable failed")
-			os.Exit(0)
-		}
+		query := fmt.Sprintf("SELECT code FROM daily WHERE date = '%s'", previousBussinessDay)
+		dbRet := fetchSelectResult(r, db, query)
+		//		log.Infof(ctx, "select query: %s", query)
+		//		dbRet := selectTable(r, db, query)
+		//		if dbRet == nil {
+		//			log.Errorf(ctx, "selectTable failed")
+		//			os.Exit(0)
+		//		}
+
 		// あとで全銘柄と比較するためにmapに格納
 		dbCodesMap := map[int]bool{}
 		for _, v := range dbRet {
@@ -390,67 +400,216 @@ func getEachCodesPrices(r *http.Request, codes [][]interface{}) []codePrice {
 	return prices
 }
 
-func indexHandlerCalcDaily(w http.ResponseWriter, r *http.Request) {
+func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 	// GAE log
 	ctx := appengine.NewContext(r)
 
-	// read environment values
-	getEnv(r)
+	// TODO: 休日には動かないようにあとでする
+	//	// read environment values
+	//	getEnv(r)
+	//	// spreadsheetのclientを取得
+	//	sheetService, err := getSheetClient(r)
+	//	if err != nil {
+	//		log.Errorf(ctx, "err: %v", err)
+	//		os.Exit(0)
+	//	}
+	//	if !isBussinessday(sheetService, r) {
+	//		log.Infof(ctx, "Is not a business day today.")
+	//		return
+	//	}
 
-	// spreadsheetのclientを取得
-	sheetService, err := getSheetClient(r)
+	// cloud sql(ローカルの場合はmysql)と接続
+	db, err := dialSql(r)
 	if err != nil {
-		log.Errorf(ctx, "err: %v", err)
+		log.Errorf(ctx, "Could not open db: %v", err)
 		os.Exit(0)
 	}
+	log.Infof(ctx, "Succeded to open db")
 
-	if !isBussinessday(sheetService, r) {
-		log.Infof(ctx, "Is not a business day today.")
-		return
-	}
+	// 最新の日付にある銘柄を取得
+	codes := fetchSelectResult(r, db,
+		"SELECT code FROM daily WHERE date = (SELECT date FROM daily ORDER BY date DESC LIMIT 1);")
 
-	// spreadsheetから銘柄コードを取得
-	//codes := readCode(sheetService, r, "ichibu")
-	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
-	if codes == nil || len(codes) == 0 {
-		log.Infof(ctx, "No target data.")
-		return
-	}
-
-	// spreadsheetから株価を取得する
-	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
-	if resp == nil {
-		log.Infof(ctx, "No data")
-		return
-	}
-
-	cdmp := codeDateModprice(r, resp)
-	//log.Infof(ctx, "%v\n", cdmp)
-
-	// 全codeの株価比率
-	var whole_codeRate []codeRate
-	for _, row := range codes {
-		code := row[0].(string)
-		//直近7日間の増減率を取得する
-		rate, err := calcIncreaseRate(cdmp, code, 7, r)
-		if err != nil {
-			log.Warningf(ctx, "%v\n", err)
-			continue
+	// codeと件数(指定しない場合は0)を与えると、日付と終値の構造体を直近の日付順にして配列で返す関数
+	orderedDateClose := func(code string, limit int) []dateClose {
+		limitStr := ""
+		if limit != 0 {
+			limitStr = fmt.Sprintf("LIMIT %d", limit)
 		}
-		whole_codeRate = append(whole_codeRate, codeRate{code, rate})
+
+		dbRet := fetchSelectResult(r, db, fmt.Sprintf(
+			"SELECT date, close FROM daily WHERE code = %s ORDER BY date DESC %s;", code, limitStr))
+
+		var dateCloses []dateClose
+		// 日付と終値の２つを取得
+		for i := 0; i < len(dbRet); i += 2 {
+			// int32型数値に変換
+			//c, _ := strconv.Atoi(dbRet[i+1].(string))
+			c, _ := strconv.ParseInt(dbRet[i+1].(string), 10, 64)
+			dateCloses = append(dateCloses, dateClose{Date: dbRet[i].(string), Close: c})
+			//log.Infof(ctx, "%s %s", dbRet[i], dbRet[i+1])
+		}
+		return dateCloses
 	}
-	log.Infof(ctx, "count whole code %v\n", len(whole_codeRate))
 
-	// 一つ前との比率が一番大きいもの順にソート
-	sort.SliceStable(whole_codeRate, func(i, j int) bool { return whole_codeRate[i].Rate[0] > whole_codeRate[j].Rate[0] })
-	//fmt.Fprintln(w, whole_codeRate)
+	//	calcCloseRate := func(dcs []dateClose) {
+	//		for i := 0; i < len(dcs)-1; i++ {
+	//			// 前日との比率
+	//			log.Infof(ctx, "date %s close %d rate %f", dcs[i].Date, dcs[i].Close, float64(dcs[i].Close)/float64(dcs[i+1].Close))
+	//		}
+	//	}
 
-	// 事前にrateのシートをclear
-	clearSheet(sheetService, r, DAILYRATE_SHEETID, "daily_rate")
+	for _, code := range codes {
+		// 直近 100日分最近から順にソートして取得
+		dcs := orderedDateClose(code.(string), 100)
 
-	// 株価の比率順にソートしたものを書き込み
-	writeRate(sheetService, r, whole_codeRate, DAILYRATE_SHEETID, "daily_rate")
+		// DBから取得できた日付のリスト
+		var dateList []string
+		for date := 0; date < len(dcs); date++ {
+			dateList = append(dateList, dcs[date].Date)
+		}
+		log.Infof(ctx, "moving average target code %s, dateSize: %d, dateList: %v", code.(string), len(dateList), dateList)
+
+		// 取得対象の移動平均
+		mvAvgList := []int{5, 20, 60, 100}
+		// (日付;移動平均)のMapを5, 20,...ごとに格納したMap
+		daysDateMovingMap := make(map[int]map[string]float64)
+		for _, d := range mvAvgList {
+			daysDateMovingMap[d] = movingAverage(dcs, d)
+		}
+		// 移動平均をDBに書き込み
+		insertMovingAvg(r, db, "movingavg", code.(string), dateList, daysDateMovingMap)
+	}
+
+	// 以下のgoroutineを実行したら以下のエラーが発生
+	// A problem was encountered with the process that handled this request, causing it to exit. This is likely to cause a new process to be used for the next request to your application. (Error code 204)
+
+	//	var wg sync.WaitGroup
+	//	wg.Add(len(codes))
+	//	for _, code := range codes {
+	//		go func(code string) {
+	//			defer wg.Done()
+	//			// 直近 100日分新しい順にソートして取得
+	//			dcs := orderedDateClose(code, 100)
+	//
+	//			// DBから取得できた日付のリスト
+	//			var dateList []string
+	//			for date := 0; date < len(dcs); date++ {
+	//				dateList = append(dateList, dcs[date].Date)
+	//			}
+	//
+	//			// 取得対象の移動平均
+	//			mvAvgList := []int{5, 20, 60, 100}
+	//			// (日付;移動平均)のMapを5, 20,...ごとに格納したMap
+	//			daysDateMovingMap := make(map[int]map[string]float64)
+	//			for _, d := range mvAvgList {
+	//				// 移動平均の計算
+	//				daysDateMovingMap[d] = movingAverage(dcs, d)
+	//			}
+	//			// 移動平均をDBに書き込み
+	//			insertMovingAvg(r, db, "movingavg", code, dateList, daysDateMovingMap)
+	//
+	//		}(code.(string)) // codeはinterface型なのでキャストする
+	//	}
+	//	wg.Wait()
+
 }
+
+// X日移動平均線を計算する
+//func movingAverage(r *http.Request, dcs []dateClose, avgDays int) map[string]float64 {
+//	// GAE log
+//	ctx := appengine.NewContext(r)
+func movingAverage(dcs []dateClose, avgDays int) map[string]float64 {
+
+	dateMovingMap := make(map[string]float64) // 日付と移動平均のMap
+
+	// 与えられた日付-終値の要素数
+	length := len(dcs)
+	for date := 0; date < length; date++ {
+
+		// X日移動平均のX(avgDays)を定義
+		days := avgDays
+		// Xが残りのデータ数より多かったら残りのデータ数がdaysになる
+		if date+days > length {
+			days = length - date
+		}
+		var sum int64
+		for i := date; i < date+days; i++ {
+			sum += dcs[i].Close
+		}
+
+		movingAvg := float64(sum) / float64(days)
+		dateMovingMap[dcs[date].Date] = movingAvg
+
+		//	log.Infof(ctx, "%d average %s %d %f", avgDays, dcs[date].Date, dcs[date].Close, movingAvg)
+	}
+
+	//return movingAvgList
+	//log.Infof(ctx, "%d %v", avgDays, dateMovingMap)
+	return dateMovingMap
+}
+
+//func indexHandlerCalcDailyOld(w http.ResponseWriter, r *http.Request) {
+//	// GAE log
+//	ctx := appengine.NewContext(r)
+//
+//	// read environment values
+//	getEnv(r)
+//
+//	// spreadsheetのclientを取得
+//	sheetService, err := getSheetClient(r)
+//	if err != nil {
+//		log.Errorf(ctx, "err: %v", err)
+//		os.Exit(0)
+//	}
+//
+//	if !isBussinessday(sheetService, r) {
+//		log.Infof(ctx, "Is not a business day today.")
+//		return
+//	}
+//
+//	// spreadsheetから銘柄コードを取得
+//	//codes := readCode(sheetService, r, "ichibu")
+//	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
+//	if codes == nil || len(codes) == 0 {
+//		log.Infof(ctx, "No target data.")
+//		return
+//	}
+//
+//	// spreadsheetから株価を取得する
+//	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
+//	if resp == nil {
+//		log.Infof(ctx, "No data")
+//		return
+//	}
+//
+//	cdmp := codeDateModprice(r, resp)
+//	//log.Infof(ctx, "%v\n", cdmp)
+//
+//	// 全codeの株価比率
+//	var whole_codeRate []codeRate
+//	for _, row := range codes {
+//		code := row[0].(string)
+//		//直近7日間の増減率を取得する
+//		rate, err := calcIncreaseRate(cdmp, code, 7, r)
+//		if err != nil {
+//			log.Warningf(ctx, "%v\n", err)
+//			continue
+//		}
+//		whole_codeRate = append(whole_codeRate, codeRate{code, rate})
+//	}
+//	log.Infof(ctx, "count whole code %v\n", len(whole_codeRate))
+//
+//	// 一つ前との比率が一番大きいもの順にソート
+//	sort.SliceStable(whole_codeRate, func(i, j int) bool { return whole_codeRate[i].Rate[0] > whole_codeRate[j].Rate[0] })
+//	//fmt.Fprintln(w, whole_codeRate)
+//
+//	// 事前にrateのシートをclear
+//	clearSheet(sheetService, r, DAILYRATE_SHEETID, "daily_rate")
+//
+//	// 株価の比率順にソートしたものを書き込み
+//	writeRate(sheetService, r, whole_codeRate, DAILYRATE_SHEETID, "daily_rate")
+//}
 
 func codeDateModprice(r *http.Request, resp [][]interface{}) [][]interface{} {
 	//ctx := appengine.NewContext(r)

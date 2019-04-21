@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"google.golang.org/appengine" // Required external App Engine library
@@ -59,7 +60,35 @@ func insertDailyPrice(r *http.Request, db *sql.DB, table string, resp [][]interf
 		log.Errorf(ctx, "failed to insert table: %s, err: %v, query: %v", table, err, query)
 		return
 	}
-	log.Infof(ctx, "succeded to insert dailyprice")
+	log.Infof(ctx, "succeded to insert %s", table)
+	defer rows.Close()
+}
+
+func insertMovingAvg(r *http.Request, db *sql.DB, table string, code string, dateList []string, mvavg map[int]map[string]float64) {
+	ctx := appengine.NewContext(r)
+
+	// insert対象を組み立てる
+	// TODO: +=の文字列結合は遅いので改良する
+	// TODO: 上のinsertDailyPriceと共通化したい
+	ins := ""
+	for _, date := range dateList {
+		//		log.Infof(ctx, "code %s, date %s, 5: %v, 20: %v, 60: %v, 100 %v", date, mvavg[5][date], mvavg[20][date], mvavg[60][date], mvavg[100][date])
+
+		// code, date, moving5, moving20, moving60, moving100
+		ins += fmt.Sprintf("('%s', '%s', '%f', '%f', '%f', '%f'),", code, date, mvavg[5][date], mvavg[20][date], mvavg[60][date], mvavg[100][date])
+	}
+	// 末尾の,を除去
+	ins = strings.TrimRight(ins, ",")
+	//
+	log.Infof(ctx, "trying to insert %d into %s", len(dateList), table)
+	query := fmt.Sprintf("INSERT IGNORE INTO movingavg (code, date, moving5, moving20, moving60, moving100) VALUES %s;", ins)
+	log.Debugf(ctx, "query: %v", query)
+	rows, err := db.Query(query)
+	if err != nil {
+		log.Errorf(ctx, "failed to insert table: %s, err: %v, query: %v", table, err, query)
+		return
+	}
+	log.Infof(ctx, "succeded to insert %s", table)
 	defer rows.Close()
 }
 
@@ -103,10 +132,17 @@ func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
 		log.Errorf(ctx, fmt.Sprintf("failed to get columns: %v", err))
 	}
 
+	// 列の長さ分だけのvalues
+	// see https://golang.org/pkg/database/sql/#RawBytes
+	// RawBytes is a byte slice that holds a reference to memory \
+	// owned by the database itself.
+	// After a Scan into a RawBytes, \
+	// the slice is only valid until the next call to Next, Scan, or Close.
+	values := make([]sql.RawBytes, len(columns))
+
 	// rows.Scan は引数として'[]interface{}'が必要なので,
 	// この引数scanArgsに列のサイズだけ確保した変数の参照をコピー
 	// See http://code.google.com/p/go-wiki/wiki/InterfaceSlice for details
-	values := make([]sql.RawBytes, len(columns))
 	scanArgs := make([]interface{}, len(values))
 	for i := range values {
 		scanArgs[i] = &values[i]
@@ -123,8 +159,6 @@ func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
 			log.Errorf(ctx, "failed to scan: %v", err)
 		}
 
-		// Now do something with the data.
-		// Here we just print each column as a string.
 		for _, col := range values {
 			// Here we can check if the value is nil (NULL value)
 			if col == nil {
@@ -138,4 +172,17 @@ func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
 		log.Errorf(ctx, "row error: %v", err)
 	}
 	return retVals
+}
+
+// selectTableの結果を返す関数
+func fetchSelectResult(r *http.Request, db *sql.DB, q string) []interface{} {
+	// GAE log
+	ctx := appengine.NewContext(r)
+	log.Infof(ctx, "select query: %s", q)
+	dbRet := selectTable(r, db, q)
+	if dbRet == nil {
+		log.Errorf(ctx, "selectTable failed")
+		os.Exit(0)
+	}
+	return dbRet
 }
