@@ -468,11 +468,11 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 		for date := 0; date < len(dcs); date++ {
 			dateList = append(dateList, dcs[date].Date)
 		}
-		log.Infof(ctx, "moving average target code %s, dateSize: %d, dateList: %v", code.(string), len(dateList), dateList)
+		log.Infof(ctx, "moving average target code %s, dateSize: %d", code.(string), len(dateList))
 
 		// 取得対象の移動平均
-		mvAvgList := []int{5, 20, 60, 100}
-		// (日付;移動平均)のMapを5, 20,...ごとに格納したMap
+		mvAvgList := []int{3, 5, 7, 10, 20, 60, 100}
+		// (日付;移動平均)のMapを3, 5, 7,...ごとに格納したMap
 		daysDateMovingMap := make(map[int]map[string]float64)
 		for _, d := range mvAvgList {
 			daysDateMovingMap[d] = movingAverage(dcs, d)

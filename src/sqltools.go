@@ -74,15 +74,15 @@ func insertMovingAvg(r *http.Request, db *sql.DB, table string, code string, dat
 	for _, date := range dateList {
 		//		log.Infof(ctx, "code %s, date %s, 5: %v, 20: %v, 60: %v, 100 %v", date, mvavg[5][date], mvavg[20][date], mvavg[60][date], mvavg[100][date])
 
-		// code, date, moving5, moving20, moving60, moving100
-		ins += fmt.Sprintf("('%s', '%s', '%f', '%f', '%f', '%f'),", code, date, mvavg[5][date], mvavg[20][date], mvavg[60][date], mvavg[100][date])
+		// code, date, moving3, moving5, moving7...
+		ins += fmt.Sprintf("('%s', '%s', '%f', '%f', '%f', '%f', '%f', '%f', '%f'),", code, date, mvavg[3][date], mvavg[5][date], mvavg[7][date], mvavg[10][date], mvavg[20][date], mvavg[60][date], mvavg[100][date])
 	}
 	// 末尾の,を除去
 	ins = strings.TrimRight(ins, ",")
 	//
 	log.Infof(ctx, "trying to insert %d into %s", len(dateList), table)
-	query := fmt.Sprintf("INSERT IGNORE INTO movingavg (code, date, moving5, moving20, moving60, moving100) VALUES %s;", ins)
-	log.Debugf(ctx, "query: %v", query)
+	query := fmt.Sprintf("INSERT IGNORE INTO movingavg (code, date, moving3, moving5, moving7, moving10, moving20, moving60, moving100) VALUES %s;", ins)
+	//log.Debugf(ctx, "query: %v", query)
 	rows, err := db.Query(query)
 	if err != nil {
 		log.Errorf(ctx, "failed to insert table: %s, err: %v, query: %v", table, err, query)
