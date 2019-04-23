@@ -56,16 +56,19 @@ mysql> select * from daily;
 mysql> 
 ```
 ## 移動平均線
-| 銘柄        | 日付        | 前日終値    | ５日移動平均 | ２０日移動平均 | ６０日移動平均 | １００日移動平均 |
-|-------------|-------------|-------------|--------------|----------------|----------------|------------------|
-| code        | date        | close       | moving5      | moving20       | moving60       | moving100        |
-| VARCHAR(10) | VARCHAR(10) | VARCHAR(10) | DOUBLE       | DOUBLE         | DOUBLE         | DOUBLE           |
+| 銘柄        | 日付        | 3日移動平均 | 5日移動平均 | 7日移動平均 | 10日移動平均 | 20日移動平均 | 60日移動平均 | 100日移動平均 |
+|-------------|-------------|-------------|-------------|-------------|--------------|--------------|--------------|---------------|
+| code        | date        | moving3     | moving5     | moving7     | moving10     | moving20     | moving60     | moving100     |
+| VARCHAR(10) | VARCHAR(10) | DOUBLE      | DOUBLE      | DOUBLE      | DOUBLE       | DOUBLE       | DOUBLE       | DOUBLE        |
 
 ```
 CREATE TABLE movingavg (
 	code VARCHAR(10) NOT NULL,
 	date VARCHAR(10) NOT NULL,
+	moving3 DOUBLE,
 	moving5 DOUBLE,
+	moving7 DOUBLE,
+	moving10 DOUBLE,
 	moving20 DOUBLE,
 	moving60 DOUBLE,
 	moving100 DOUBLE,
@@ -79,9 +82,12 @@ MySQL [stockprice]>  show columns from movingavg;
 +-----------+-------------+------+-----+---------+-------+
 | code      | varchar(10) | NO   | PRI | NULL    |       |
 | date      | varchar(10) | NO   | PRI | NULL    |       |
+| moving3   | double      | YES  |     | NULL    |       |
 | moving5   | double      | YES  |     | NULL    |       |
-| moving60  | double      | YES  |     | NULL    |       |
+| moving7   | double      | YES  |     | NULL    |       |
+| moving10  | double      | YES  |     | NULL    |       |
 | moving20  | double      | YES  |     | NULL    |       |
+| moving60  | double      | YES  |     | NULL    |       |
 | moving100 | double      | YES  |     | NULL    |       |
 +-----------+-------------+------+-----+---------+-------+
 6 rows in set (0.04 sec)
