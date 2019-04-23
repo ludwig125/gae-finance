@@ -82,7 +82,7 @@ func insertMovingAvg(r *http.Request, db *sql.DB, table string, code string, dat
 	//
 	log.Infof(ctx, "trying to insert %d into %s", len(dateList), table)
 	query := fmt.Sprintf("INSERT IGNORE INTO movingavg (code, date, moving3, moving5, moving7, moving10, moving20, moving60, moving100) VALUES %s;", ins)
-	log.Debugf(ctx, "query: %v", query)
+	//log.Debugf(ctx, "query: %v", query)
 	rows, err := db.Query(query)
 	if err != nil {
 		log.Errorf(ctx, "failed to insert table: %s, err: %v, query: %v", table, err, query)
