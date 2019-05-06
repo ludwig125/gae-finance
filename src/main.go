@@ -40,6 +40,7 @@ type dateClose struct {
 func main() {
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", indexHandlerDaily)
+	//http.HandleFunc("/dailysql", indexHandlerDailySql)
 	//http.HandleFunc("/calc_daily", indexHandlerCalcDailyOld)
 	http.HandleFunc("/movingavg", movingAvgHandler)
 	http.HandleFunc("/", indexHandler)
@@ -90,6 +91,13 @@ func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
 		os.Exit(0)
 	}
 
+	// DBへの書き込み対象の全件数
+	targetTotal := len(resp)
+	// DBに書き込めた件数
+	inserted := 0
+	// 書き込み対象のdaily の項目名
+	dailyColumns := []string{"code", "date", "open", "high", "low", "close", "turnover", "modified"}
+
 	// MAX_SQL_INSERT件数ごとにsqlに書き込む
 	length := len(resp)
 	for begin := 0; begin < length; begin += MAX_SQL_INSERT {
@@ -103,8 +111,18 @@ func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// dailypriceをcloudsqlに挿入
-		insertDailyPrice(r, db, "daily", resp[begin:end])
+		ins, err := insertDailyPrice(r, db, "daily", dailyColumns, resp[begin:end])
+		if err != nil {
+			log.Errorf(ctx, "failed to insert. %v", err)
+		}
+		inserted += ins
 	}
+
+	if targetTotal != inserted {
+		log.Errorf(ctx, "failed to insert all data. target: %d, inserted: %d", targetTotal, inserted)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "succeeded to insert all data. target: %d, inserted: %d", targetTotal, inserted)
 }
 
 // 本日分のデータがスプレッドシートとDB両方に書き込まれていたらスプレッドシートのデータを消す
@@ -280,6 +298,79 @@ func mustGetenv(r *http.Request, k string) string {
 	log.Infof(ctx, "%s environment variable set.", k)
 	return v
 }
+
+//func indexHandlerDailySql(w http.ResponseWriter, r *http.Request) {
+//	// GAE log
+//	ctx := appengine.NewContext(r)
+//
+//	// read environment values
+//	getEnv(r)
+//
+//	// 100件ずつ(test環境は10件)スクレイピングしてSheetに書き込み
+//	// 最初に環境変数を読み込む
+//	MAX_SHEET_INSERT, err := strconv.Atoi(mustGetenv(r, "MAX_SHEET_INSERT"))
+//	if err != nil {
+//		log.Errorf(ctx, "failed to get MAX_SHEET_INSERT. err: %v", err)
+//		os.Exit(0)
+//	}
+//
+//	// spreadsheetのclientを取得
+//	sheetService, err := getSheetClient(r)
+//	if err != nil {
+//		log.Errorf(ctx, "err: %v", err)
+//		os.Exit(0)
+//	}
+//
+//	if !isBussinessday(sheetService, r) {
+//		log.Infof(ctx, "Is not a business day today.")
+//		return
+//	}
+//
+//	// spreadsheetから銘柄コードを取得
+//	//codes := readCode(sheetService, r, "ichibu")
+//	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
+//	if codes == nil || len(codes) == 0 {
+//		log.Infof(ctx, "No target data.")
+//		os.Exit(0)
+//	}
+//
+//	// cloud sql(ローカルの場合はmysql)と接続
+//	db, err := dialSql(r)
+//	if err != nil {
+//		log.Errorf(ctx, "Could not open db: %v", err)
+//		os.Exit(0)
+//	}
+//	log.Infof(ctx, "Succeded to open db")
+//
+//	// 書き込み対象の件数
+//	target := 0
+//	// 書き込めた件数
+//	inserted := 0
+//
+//	log.Infof(ctx, "db %T", db)
+//	length := len(codes)
+//	for begin := 0; begin < length; begin += MAX_SHEET_INSERT {
+//		end := begin + MAX_SHEET_INSERT
+//		if end >= length {
+//			end = length
+//		}
+//		// 指定された複数の銘柄単位でcodeをScrape
+//		prices := getEachCodesPrices(r, codes[begin:end])
+//		// dailypriceをcloudsqlに挿入
+//		insertDailyPrice(r, db, "daily", prices)
+//
+//		//tar, ins := scrapeAndWriteSql(r, db, codes[begin:end])
+//		target += tar
+//		inserted += ins
+//	}
+//
+//	log.Infof(ctx, "wrote records done. target: %d, inserted: %d", target, inserted)
+//	if target != inserted {
+//		log.Errorf(ctx, "failed to write all records. target: %d, inserted: %d", target, inserted)
+//		os.Exit(0)
+//	}
+//	log.Infof(ctx, "succeded to write all records.")
+//}
 
 func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	// GAE log
