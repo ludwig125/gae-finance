@@ -111,7 +111,7 @@ func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// dailypriceをcloudsqlに挿入
-		ins, err := insertDailyPrice(r, db, "daily", dailyColumns, resp[begin:end])
+		ins, err := insertData(r, db, "daily", dailyColumns, resp[begin:end])
 		if err != nil {
 			log.Errorf(ctx, "failed to insert. %v", err)
 		}
@@ -357,7 +357,7 @@ func mustGetenv(r *http.Request, k string) string {
 //		// 指定された複数の銘柄単位でcodeをScrape
 //		prices := getEachCodesPrices(r, codes[begin:end])
 //		// dailypriceをcloudsqlに挿入
-//		insertDailyPrice(r, db, "daily", prices)
+//		insertData(r, db, "daily", prices)
 //
 //		//tar, ins := scrapeAndWriteSql(r, db, codes[begin:end])
 //		target += tar
