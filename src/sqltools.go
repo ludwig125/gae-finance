@@ -37,27 +37,27 @@ func dialSql(r *http.Request) (*sql.DB, error) {
 	return sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/stockprice", user, password, connectionName))
 }
 
-func insertDailyPrice(r *http.Request, db *sql.DB, table string, columns []string, resp [][]interface{}) (int, error) {
+func insertData(r *http.Request, db *sql.DB, table string, columns []string, records [][]interface{}) (int, error) {
 	ctx := appengine.NewContext(r)
 
 	// insert対象を組み立てる
 	// TODO: +=の文字列結合は遅いので改良する
 	ins := ""
-	for _, line := range resp {
+	for _, record := range records {
 		// 一行ごとに('項目1',..., '最後の項目'), の形でINSERT対象を組み立て
 		ins += "("
-		for i := 0; i < len(line)-1; i++ {
-			ins += fmt.Sprintf("'%s',", line[i])
+		for i := 0; i < len(record)-1; i++ {
+			ins += fmt.Sprintf("'%s',", record[i])
 		}
 		// 最後の項目だけ後ろに","が不要なので分けて記載
-		ins += fmt.Sprintf("'%s'),", line[len(line)-1])
+		ins += fmt.Sprintf("'%s'),", record[len(record)-1])
 	}
 	// 末尾の,を除去
 	ins = strings.TrimRight(ins, ",")
 	//log.Debugf(ctx, "ins: %v", ins)
 
 	// 挿入対象の件数
-	targetNum := len(resp)
+	targetNum := len(records)
 
 	log.Infof(ctx, "trying to insert %d values to '%s' table.", targetNum, table)
 	// INSERT IGNORE INTO 'table名' (項目名1, 項目名2...) VALUES (...), (...)の形
@@ -85,7 +85,7 @@ func insertMovingAvg(r *http.Request, db *sql.DB, table string, code string, dat
 
 	// insert対象を組み立てる
 	// TODO: +=の文字列結合は遅いので改良する
-	// TODO: 上のinsertDailyPriceと共通化したい
+	// TODO: 上のinsertDataと共通化したい
 	ins := ""
 	for _, date := range dateList {
 		//		log.Infof(ctx, "code %s, date %s, 5: %v, 20: %v, 60: %v, 100 %v", date, mvavg[5][date], mvavg[20][date], mvavg[60][date], mvavg[100][date])
