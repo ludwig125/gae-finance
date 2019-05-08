@@ -40,7 +40,7 @@ type dateClose struct {
 func main() {
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", indexHandlerDaily)
-	//http.HandleFunc("/dailysql", indexHandlerDailySql)
+	http.HandleFunc("/dailysql", indexHandlerDailySql)
 	//http.HandleFunc("/calc_daily", indexHandlerCalcDailyOld)
 	http.HandleFunc("/movingavg", movingAvgHandler)
 	http.HandleFunc("/", indexHandler)
@@ -299,78 +299,84 @@ func mustGetenv(r *http.Request, k string) string {
 	return v
 }
 
-//func indexHandlerDailySql(w http.ResponseWriter, r *http.Request) {
-//	// GAE log
-//	ctx := appengine.NewContext(r)
-//
-//	// read environment values
-//	getEnv(r)
-//
-//	// 100件ずつ(test環境は10件)スクレイピングしてSheetに書き込み
-//	// 最初に環境変数を読み込む
-//	MAX_SHEET_INSERT, err := strconv.Atoi(mustGetenv(r, "MAX_SHEET_INSERT"))
-//	if err != nil {
-//		log.Errorf(ctx, "failed to get MAX_SHEET_INSERT. err: %v", err)
-//		os.Exit(0)
-//	}
-//
-//	// spreadsheetのclientを取得
-//	sheetService, err := getSheetClient(r)
-//	if err != nil {
-//		log.Errorf(ctx, "err: %v", err)
-//		os.Exit(0)
-//	}
-//
-//	if !isBussinessday(sheetService, r) {
-//		log.Infof(ctx, "Is not a business day today.")
-//		return
-//	}
-//
-//	// spreadsheetから銘柄コードを取得
-//	//codes := readCode(sheetService, r, "ichibu")
-//	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
-//	if codes == nil || len(codes) == 0 {
-//		log.Infof(ctx, "No target data.")
-//		os.Exit(0)
-//	}
-//
-//	// cloud sql(ローカルの場合はmysql)と接続
-//	db, err := dialSql(r)
-//	if err != nil {
-//		log.Errorf(ctx, "Could not open db: %v", err)
-//		os.Exit(0)
-//	}
-//	log.Infof(ctx, "Succeded to open db")
-//
-//	// 書き込み対象の件数
-//	target := 0
-//	// 書き込めた件数
-//	inserted := 0
-//
-//	log.Infof(ctx, "db %T", db)
-//	length := len(codes)
-//	for begin := 0; begin < length; begin += MAX_SHEET_INSERT {
-//		end := begin + MAX_SHEET_INSERT
-//		if end >= length {
-//			end = length
-//		}
-//		// 指定された複数の銘柄単位でcodeをScrape
-//		prices := getEachCodesPrices(r, codes[begin:end])
-//		// dailypriceをcloudsqlに挿入
-//		insertData(r, db, "daily", prices)
-//
-//		//tar, ins := scrapeAndWriteSql(r, db, codes[begin:end])
-//		target += tar
-//		inserted += ins
-//	}
-//
-//	log.Infof(ctx, "wrote records done. target: %d, inserted: %d", target, inserted)
-//	if target != inserted {
-//		log.Errorf(ctx, "failed to write all records. target: %d, inserted: %d", target, inserted)
-//		os.Exit(0)
-//	}
-//	log.Infof(ctx, "succeded to write all records.")
-//}
+func indexHandlerDailySql(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	// read environment values
+	getEnv(r)
+
+	// 100件ずつ(test環境は10件)スクレイピングしてSheetに書き込み
+	// 最初に環境変数を読み込む
+	MAX_SHEET_INSERT, err := strconv.Atoi(mustGetenv(r, "MAX_SHEET_INSERT"))
+	if err != nil {
+		log.Errorf(ctx, "failed to get MAX_SHEET_INSERT. err: %v", err)
+		os.Exit(0)
+	}
+
+	// spreadsheetのclientを取得
+	sheetService, err := getSheetClient(r)
+	if err != nil {
+		log.Errorf(ctx, "err: %v", err)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "Succeeded to get sheet client")
+
+	if !isBussinessday(sheetService, r) {
+		log.Infof(ctx, "Is not a business day today.")
+		return
+	}
+
+	// spreadsheetから銘柄コードを取得
+	//codes := readCode(sheetService, r, "ichibu")
+	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
+	if codes == nil || len(codes) == 0 {
+		log.Infof(ctx, "No target data.")
+		os.Exit(0)
+	}
+
+	// cloud sql(ローカルの場合はmysql)と接続
+	db, err := dialSql(r)
+	if err != nil {
+		log.Errorf(ctx, "Could not open db: %v", err)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "Succeeded to open db")
+
+	// 書き込み対象の件数
+	target := 0
+	// 書き込めた件数
+	inserted := 0
+
+	// 書き込み対象のdaily の項目名
+	dailyColumns := []string{"code", "date", "open", "high", "low", "close", "turnover", "modified"}
+
+	log.Infof(ctx, "db %T", db)
+	length := len(codes)
+	for begin := 0; begin < length; begin += MAX_SHEET_INSERT {
+		end := begin + MAX_SHEET_INSERT
+		if end >= length {
+			end = length
+		}
+		// 指定された複数の銘柄単位でcodeをScrape
+		prices := getEachCodesPricesNew(r, codes[begin:end])
+		//log.Debugf(ctx, "prices: %v", prices)
+
+		// dailypriceをcloudsqlに挿入
+		ins, err := insertDataStrings(r, db, "daily", dailyColumns, prices)
+		if err != nil {
+			log.Errorf(ctx, "failed to insert. %v", err)
+		}
+		target += len(prices)
+		inserted += ins
+	}
+
+	if target != inserted {
+		log.Errorf(ctx, "failed to write all records. target: %d, inserted: %d", target, inserted)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "succeded to write all records. target: %d, inserted: %d", target, inserted)
+}
 
 func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
 	// GAE log
@@ -461,6 +467,44 @@ func scrapeAndWrite(r *http.Request, codes [][]interface{}, s *sheets.Service, e
 }
 
 // 複数銘柄についてそれぞれの株価を取得する
+func getEachCodesPricesNew(r *http.Request, codes [][]interface{}) [][]string {
+	ctx := appengine.NewContext(r)
+
+	var codePrices [][]string
+
+	var allErrors string
+	for _, v := range codes {
+		code := v[0].(string) // row's type: []interface {}. ex. [8411]
+
+		// codeごとに株価を取得
+		// oneMonthPricesは,
+		// [日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値]の配列が１ヶ月分入った二重配列
+		oneMonthPrices, err := doScrapeDaily(r, code)
+		if err != nil {
+			//log.Infof(ctx, "err: %v", err)
+			allErrors += fmt.Sprintf("%v ", err)
+			continue
+		}
+		//log.Debugf(ctx, "getEachCodesPrices prices: %v", p)
+
+		// ["日付", "始値"...],["日付", "始値"...],...を１行ずつ展開
+		for _, oneDayPrices := range oneMonthPrices {
+			// ["日付", "始値"...]の配列の先頭に銘柄codeを追加
+			oneDayCodePrices := append([]string{code}, oneDayPrices...)
+			//log.Debugf(ctx, "getEachCodesPrices each price: %v", codePrice)
+			codePrices = append(codePrices, oneDayCodePrices)
+		}
+		time.Sleep(1 * time.Second) // 1秒待つ
+	}
+	if allErrors != "" {
+		// 複数の銘柄で起きたエラーをまとめて出力
+		log.Warningf(ctx, "failed to scrape. code: [%s]\n", allErrors)
+	}
+	return codePrices
+}
+
+// TODO: あとでこれは消してgetEachCodesPricesNewと置き換える
+// 複数銘柄についてそれぞれの株価を取得する
 func getEachCodesPrices(r *http.Request, codes [][]interface{}) []codePrice {
 	ctx := appengine.NewContext(r)
 
@@ -478,6 +522,7 @@ func getEachCodesPrices(r *http.Request, codes [][]interface{}) []codePrice {
 			allErrors += fmt.Sprintf("%v ", err)
 			continue
 		}
+		log.Infof(ctx, "getEachCodesPrices prices: %v", p)
 		// code, 株価の単位でpricesに格納
 		for _, dp := range p {
 			prices = append(prices, codePrice{code, dp})
