@@ -184,30 +184,30 @@ func deleteSheetHandler(w http.ResponseWriter, r *http.Request) {
 		log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
 	}
 
-	// あとで全銘柄と比較するためにsheetの直近の取引日のデータに含まれる銘柄を取得してmapに格納
-	codesInSheet := func() map[int]bool {
-		// spreadsheetからdailypriceを取得
-		sheetRet := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
-		if sheetRet == nil {
-			log.Errorf(ctx, "failed to fetch sheetdata. err: '%v'.", sheetRet)
-			os.Exit(0)
-		}
-		log.Infof(ctx, "number of sheet data %d", len(sheetRet))
-
-		sheetCodesMap := map[int]bool{}
-		log.Infof(ctx, "fetch code from spreadsheet. target date: '%s'", previousBussinessDay)
-		for _, v := range sheetRet {
-			// 銘柄、日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値の配列から
-			// 日付を抜き出して、previousBussinessDayと一致したらその銘柄ID(code)を取得
-			if v[1] == previousBussinessDay {
-				code, _ := strconv.Atoi(v[0].(string)) // int型に変換
-				sheetCodesMap[code] = true
-			}
-		}
-		log.Infof(ctx, "sheetcodes %v", sheetCodesMap)
-		return sheetCodesMap
-	}
-	sheetCodesMap := codesInSheet()
+	//	// あとで全銘柄と比較するためにsheetの直近の取引日のデータに含まれる銘柄を取得してmapに格納
+	//	codesInSheet := func() map[int]bool {
+	//		// spreadsheetからdailypriceを取得
+	//		sheetRet := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
+	//		if sheetRet == nil {
+	//			log.Errorf(ctx, "failed to fetch sheetdata. err: '%v'.", sheetRet)
+	//			os.Exit(0)
+	//		}
+	//		log.Infof(ctx, "number of sheet data %d", len(sheetRet))
+	//
+	//		sheetCodesMap := map[int]bool{}
+	//		log.Infof(ctx, "fetch code from spreadsheet. target date: '%s'", previousBussinessDay)
+	//		for _, v := range sheetRet {
+	//			// 銘柄、日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値の配列から
+	//			// 日付を抜き出して、previousBussinessDayと一致したらその銘柄ID(code)を取得
+	//			if v[1] == previousBussinessDay {
+	//				code, _ := strconv.Atoi(v[0].(string)) // int型に変換
+	//				sheetCodesMap[code] = true
+	//			}
+	//		}
+	//		log.Infof(ctx, "sheetcodes %v", sheetCodesMap)
+	//		return sheetCodesMap
+	//	}
+	//	sheetCodesMap := codesInSheet()
 
 	// あとで全銘柄と比較するためにDBの直近の取引日のデータに含まれる銘柄を取得してmapに格納
 	codesInDb := func() map[int]bool {
@@ -227,6 +227,7 @@ func deleteSheetHandler(w http.ResponseWriter, r *http.Request) {
 		//			log.Errorf(ctx, "selectTable failed")
 		//			os.Exit(0)
 		//		}
+		log.Infof(ctx, "fetched %d codes from 'daily' in db. target date: %s", len(dbRet), previousBussinessDay)
 
 		// あとで全銘柄と比較するためにmapに格納
 		dbCodesMap := map[int]bool{}
@@ -234,7 +235,7 @@ func deleteSheetHandler(w http.ResponseWriter, r *http.Request) {
 			code, _ := strconv.Atoi(v.(string)) // int型に変換
 			dbCodesMap[code] = true
 		}
-		log.Infof(ctx, "dbcodes %v", dbCodesMap)
+		//log.Infof(ctx, "dbcodes %v", dbCodesMap)
 		return dbCodesMap
 	}
 	dbCodesMap := codesInDb()
@@ -245,46 +246,54 @@ func deleteSheetHandler(w http.ResponseWriter, r *http.Request) {
 		log.Errorf(ctx, "failed to fetch sheetdata. err: '%v'.", codes)
 		os.Exit(0)
 	}
-	// 全銘柄分がsheetにあるか確認する
-	var notExistInSheet []int
+	log.Infof(ctx, "fetched %d codes from 'ichibu' in sheet", len(codes))
+	//	// 全銘柄分がsheetにあるか確認する
+	//	var notExistInSheet []int
+	//	全銘柄分がdbにあるか確認する
 	var notExistInDb []int
 	for _, v := range codes {
 		code, _ := strconv.Atoi(v[0].(string))
-		if !sheetCodesMap[code] {
-			// sheetになければnotExistInSheetにその銘柄を追加
-			notExistInSheet = append(notExistInSheet, code)
-		}
+		//		if !sheetCodesMap[code] {
+		//			// sheetになければnotExistInSheetにその銘柄を追加
+		//			notExistInSheet = append(notExistInSheet, code)
+		//		}
 		if !dbCodesMap[code] {
 			// dbになければnotExistInDbにその銘柄を追加
 			notExistInDb = append(notExistInDb, code)
 		}
 	}
 
-	// sheetとdbを比較
-	var notExistInDbExistInSheet []int
-	// code->boolのうちcodeを取り出す
-	for k, _ := range sheetCodesMap {
-		if !dbCodesMap[k] {
-			notExistInDbExistInSheet = append(notExistInDbExistInSheet, k)
-		}
-	}
-	f := func(from string, to string, list []int) int {
-		if len(list) != 0 {
-			log.Errorf(ctx, "failed to write all '%s' data to '%s'. unmatched!! not exist in '%s': %v", from, to, to, list)
-			return 1
-		}
-		log.Infof(ctx, "succeeded to write all '%s' data to '%s'.", from, to)
-		return 0
-	}
-	// 全銘柄のうちsheetに書き込まれていない銘柄一覧と、sheetのうちDBに書き込まれていない銘柄一覧を列挙する
-	// 全銘柄のうちDBに書き込まれていない銘柄一覧は見ない
-	// どれか一つでも駄目だったら失敗
-	// boolにすると、最初の一つが駄目だとそれ以降が判定されなくなったので、結果の和にした
-	existFailues := f("codes", "sheet", notExistInSheet) + f("sheet", "db", notExistInDbExistInSheet)
-	if existFailues != 0 {
-		log.Errorf(ctx, "failed to write all data.")
+	//	// sheetとdbを比較
+	//	var notExistInDbExistInSheet []int
+	//	// code->boolのうちcodeを取り出す
+	//	for k, _ := range sheetCodesMap {
+	//		if !dbCodesMap[k] {
+	//			notExistInDbExistInSheet = append(notExistInDbExistInSheet, k)
+	//		}
+	//	}
+	//	f := func(from string, to string, list []int) int {
+	//		if len(list) != 0 {
+	//			log.Errorf(ctx, "failed to write all '%s' data to '%s'. unmatched!! not exist in '%s': %v", from, to, to, list)
+	//			return 1
+	//		}
+	//		log.Infof(ctx, "succeeded to write all '%s' data to '%s'.", from, to)
+	//		return 0
+	//	}
+	//	// 全銘柄のうちsheetに書き込まれていない銘柄一覧と、sheetのうちDBに書き込まれていない銘柄一覧を列挙する
+	//	// 全銘柄のうちDBに書き込まれていない銘柄一覧は見ない
+	//	// どれか一つでも駄目だったら失敗
+	//	// boolにすると、最初の一つが駄目だとそれ以降が判定されなくなったので、結果の和にした
+	//	//existFailues := f("codes", "sheet", notExistInSheet) + f("sheet", "db", notExistInDbExistInSheet)
+	//	existFailues := f("codes", "db", notExistInDb)
+	//	if existFailues != 0 {
+	//		log.Errorf(ctx, "failed to write all data.")
+	//		os.Exit(0)
+	//	}
+	if len(notExistInDb) != 0 {
+		log.Errorf(ctx, "failed to write all codes data to db. unmatched!! not exist in db: %v", notExistInDb)
 		os.Exit(0)
 	}
+	log.Infof(ctx, "succeeded to write all %d codes data to db.", len(dbCodesMap))
 
 	// TODO: このあと実際にシートの中身を空にする処理を追加する
 
