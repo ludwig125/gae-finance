@@ -150,7 +150,7 @@ func insertMovingAvg(r *http.Request, db *sql.DB, table string, code string, dat
 		log.Errorf(ctx, "failed to insert table: %s, err: %v, query: %v", table, err, query)
 		return
 	}
-	log.Infof(ctx, "succeded to insert %s", table)
+	log.Infof(ctx, "succeeded to insert %s", table)
 	defer rows.Close()
 }
 

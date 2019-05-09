@@ -362,7 +362,7 @@ func indexHandlerDailySql(w http.ResponseWriter, r *http.Request) {
 	// 書き込み対象のdaily の項目名
 	dailyColumns := []string{"code", "date", "open", "high", "low", "close", "turnover", "modified"}
 
-	log.Infof(ctx, "db %T", db)
+	//log.Infof(ctx, "db %T", db)
 	length := len(codes)
 	for begin := 0; begin < length; begin += MAX_SHEET_INSERT {
 		end := begin + MAX_SHEET_INSERT
@@ -370,15 +370,21 @@ func indexHandlerDailySql(w http.ResponseWriter, r *http.Request) {
 			end = length
 		}
 		// 指定された複数の銘柄単位でcodeをScrape
-		prices := getEachCodesPricesNew(r, codes[begin:end])
+		// scrapeに失敗してもエラーを出して続ける
+		prices, err := getEachCodesPricesNew(r, codes[begin:end])
+		if err != nil {
+			log.Warningf(ctx, "failed to scrape code. %v", err)
+		}
 		//log.Debugf(ctx, "prices: %v", prices)
+
+		target += len(prices)
 
 		// dailypriceをcloudsqlに挿入
 		ins, err := insertDataStrings(r, db, "daily", dailyColumns, prices)
 		if err != nil {
 			log.Errorf(ctx, "failed to insert. %v", err)
+			continue
 		}
-		target += len(prices)
 		inserted += ins
 	}
 
@@ -386,7 +392,7 @@ func indexHandlerDailySql(w http.ResponseWriter, r *http.Request) {
 		log.Errorf(ctx, "failed to write all records. target: %d, inserted: %d", target, inserted)
 		os.Exit(0)
 	}
-	log.Infof(ctx, "succeded to write all records. target: %d, inserted: %d", target, inserted)
+	log.Infof(ctx, "succeeded to write all records. target: %d, inserted: %d", target, inserted)
 }
 
 //func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
@@ -478,7 +484,7 @@ func indexHandlerDailySql(w http.ResponseWriter, r *http.Request) {
 //}
 
 // 複数銘柄についてそれぞれの株価を取得する
-func getEachCodesPricesNew(r *http.Request, codes [][]interface{}) [][]string {
+func getEachCodesPricesNew(r *http.Request, codes [][]interface{}) ([][]string, error) {
 	ctx := appengine.NewContext(r)
 
 	var codePrices [][]string
@@ -487,13 +493,14 @@ func getEachCodesPricesNew(r *http.Request, codes [][]interface{}) [][]string {
 	for _, v := range codes {
 		code := v[0].(string) // row's type: []interface {}. ex. [8411]
 
+		log.Infof(ctx, "scraping code: %s", code)
 		// codeごとに株価を取得
 		// oneMonthPricesは,
 		// [日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値]の配列が１ヶ月分入った二重配列
 		oneMonthPrices, err := doScrapeDaily(r, code)
 		if err != nil {
 			//log.Infof(ctx, "err: %v", err)
-			allErrors += fmt.Sprintf("%v ", err)
+			allErrors += fmt.Sprintf("[code: %s %v]\n", code, err)
 			continue
 		}
 		//log.Debugf(ctx, "getEachCodesPrices prices: %v", p)
@@ -509,9 +516,9 @@ func getEachCodesPricesNew(r *http.Request, codes [][]interface{}) [][]string {
 	}
 	if allErrors != "" {
 		// 複数の銘柄で起きたエラーをまとめて出力
-		log.Warningf(ctx, "failed to scrape. code: [%s]\n", allErrors)
+		return codePrices, fmt.Errorf("%s", allErrors)
 	}
-	return codePrices
+	return codePrices, nil
 }
 
 //// TODO: あとでこれは消してgetEachCodesPricesNewと置き換える
@@ -571,7 +578,7 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 		log.Errorf(ctx, "Could not open db: %v", err)
 		os.Exit(0)
 	}
-	log.Infof(ctx, "Succeded to open db")
+	log.Infof(ctx, "Succeeded to open db")
 
 	// 最新の日付にある銘柄を取得
 	codes := fetchSelectResult(r, db,
