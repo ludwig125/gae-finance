@@ -45,6 +45,7 @@ func main() {
 	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/daily_to_sql", dailyToSqlHandler)
 	http.HandleFunc("/delete_sheet", deleteSheetHandler)
+	http.HandleFunc("/test", testHandler)
 	appengine.Main() // Starts the server to receive requests
 }
 
@@ -52,6 +53,43 @@ func main() {
 func start(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
 	log.Infof(c, "STARTING")
+}
+
+type Hoge struct {
+	Name string
+}
+
+type Fuga struct {
+	Name string
+}
+
+type Piyo struct {
+	Name string
+}
+
+func testHandler(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+	var hoge Hoge
+	hogeKey := datastore.NewKey(ctx, "Hoge", "hoge", 0, nil)
+	if err := datastore.Get(ctx, hogeKey, &hoge); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var fuga Fuga
+	fugaKey := datastore.NewKey(ctx, "Fuga", "fuga", 0, nil)
+	if err := datastore.Get(ctx, fugaKey, &fuga); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var piyo Piyo
+	piyoKey := datastore.NewKey(ctx, "Piyo", "piyo", 0, nil)
+	if err := datastore.Get(ctx, piyoKey, &piyo); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func dailyToSqlHandler(w http.ResponseWriter, r *http.Request) {
