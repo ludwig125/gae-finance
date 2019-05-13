@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	//"sync"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -46,6 +46,8 @@ func main() {
 	http.HandleFunc("/daily_to_sql", dailyToSqlHandler)
 	http.HandleFunc("/delete_sheet", deleteSheetHandler)
 	http.HandleFunc("/test", testHandler)
+	http.HandleFunc("/test_goroutine", testGoroutineHandler)
+	http.HandleFunc("/test_goroutine2", testGoroutineHandler2)
 	appengine.Main() // Starts the server to receive requests
 }
 
@@ -55,40 +57,135 @@ func start(w http.ResponseWriter, r *http.Request) {
 	log.Infof(c, "STARTING")
 }
 
-type Hoge struct {
-	Name string
-}
-
-type Fuga struct {
-	Name string
-}
-
-type Piyo struct {
-	Name string
-}
-
 func testHandler(w http.ResponseWriter, r *http.Request) {
 	// GAE log
 	ctx := appengine.NewContext(r)
-	var hoge Hoge
-	hogeKey := datastore.NewKey(ctx, "Hoge", "hoge", 0, nil)
-	if err := datastore.Get(ctx, hogeKey, &hoge); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	client := urlfetch.Client(ctx)
+
+	urls := []string{"https://www.google.com", "https://badhost", "https://www.yahoo.co.jp/"}
+	checkStatus := func(urls ...string) []*http.Response {
+		var response []*http.Response
+		for _, url := range urls {
+			// resp, err := http.Get(url)
+			// ERROR: Get https://www.google.com: http.DefaultTransport and http.DefaultClient are not available in App Engine. See https://cloud.google.com/appengine/docs/go/urlfetch/
+			log.Infof(ctx, "client.Get '%s'", url)
+			resp, err := client.Get(url)
+			if err != nil {
+				log.Errorf(ctx, "%v", err)
+				continue
+			}
+			response = append(response, resp)
+			// 関数の実行にかかる時間を遅らせる
+			log.Infof(ctx, "sleep 3 sec")
+			time.Sleep(3 * time.Second)
+		}
+		return response
 	}
 
-	var fuga Fuga
-	fugaKey := datastore.NewKey(ctx, "Fuga", "fuga", 0, nil)
-	if err := datastore.Get(ctx, fugaKey, &fuga); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	//	formatStatus := func(s string) string {
+	//		// 関数の実行にかかる時間を遅らせる
+	//		time.Sleep(2 * time.Second)
+	//		return fmt.Sprintf("checkStatus: status: %s", s)
+	//	}
+	for _, response := range checkStatus(urls...) {
+		//log.Infof(ctx, "%s", formatStatus(response.Status))
+		log.Infof(ctx, "checkStatus: status: %s", response.Status)
+	}
+}
+
+func testGoroutineHandler(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+	client := urlfetch.Client(ctx)
+
+	type Result struct {
+		Error    error
+		Response *http.Response
+	}
+	checkStatus := func(
+		done <-chan interface{},
+		urls ...string,
+	) <-chan Result {
+		resultChan := make(chan Result)
+		go func() {
+			defer close(resultChan)
+			for _, url := range urls {
+				log.Infof(ctx, "client.Get '%s'", url)
+				resp, err := client.Get(url)
+				// 関数の実行にかかる時間を遅らせる
+				log.Infof(ctx, "sleep 3 sec")
+				time.Sleep(3 * time.Second)
+				result := Result{Error: err, Response: resp}
+				select {
+				case <-done:
+					return
+				case resultChan <- result:
+				}
+			}
+		}()
+		return resultChan
 	}
 
-	var piyo Piyo
-	piyoKey := datastore.NewKey(ctx, "Piyo", "piyo", 0, nil)
-	if err := datastore.Get(ctx, piyoKey, &piyo); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	done := make(chan interface{})
+	defer close(done)
+
+	urls := []string{"https://www.google.com", "https://badhost", "https://www.yahoo.co.jp/"}
+	for result := range checkStatus(done, urls...) {
+		if result.Error != nil {
+			log.Infof(ctx, "error: %v", result.Error)
+			continue
+		}
+		log.Infof(ctx, "checkStatus: status: %s", result.Response.Status)
+	}
+}
+
+func testGoroutineHandler2(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+	client := urlfetch.Client(ctx)
+
+	type Result struct {
+		Error    error
+		Response *http.Response
+	}
+	checkStatus := func(
+		done <-chan interface{},
+		urls []string,
+	) <-chan Result {
+		resultChan := make(chan Result, len(urls))
+		wg := new(sync.WaitGroup)
+
+		defer close(resultChan)
+		for _, url := range urls {
+			wg.Add(1)
+			go func(url string) {
+				defer wg.Done()
+				log.Infof(ctx, "client.Get '%s'", url)
+				resp, err := client.Get(url)
+				// 関数の実行にかかる時間を遅らせる
+				log.Infof(ctx, "sleep 3 sec")
+				time.Sleep(3 * time.Second)
+				select {
+				case <-done:
+					return
+				case resultChan <- Result{Error: err, Response: resp}:
+				}
+			}(url)
+		}
+		wg.Wait()
+		return resultChan
+	}
+
+	done := make(chan interface{})
+	defer close(done)
+	urls := []string{"https://www.google.com", "https://badhost", "https://www.yahoo.co.jp/"}
+	for result := range checkStatus(done, urls) {
+		if result.Error != nil {
+			log.Infof(ctx, "error: %v", result.Error)
+			continue
+		}
+		//log.Infof(ctx, "%s", formatStatus(result.Response.Status))
+		log.Infof(ctx, "checkStatus: status: %s", result.Response.Status)
 	}
 }
 
