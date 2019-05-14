@@ -37,39 +37,101 @@ func dialSql(r *http.Request) (*sql.DB, error) {
 	return sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/stockprice", user, password, connectionName))
 }
 
-func insertDailyPrice(r *http.Request, db *sql.DB, table string, resp [][]interface{}) {
+// TODO: insertDataの引数が[][]stringのもの。どちらかに統一する
+// insert対象のtable名、項目名、レコードを引数に取ってDBに書き込む
+func insertDataStrings(r *http.Request, db *sql.DB, table string, columns []string, records [][]string) (int, error) {
 	ctx := appengine.NewContext(r)
 
 	// insert対象を組み立てる
 	// TODO: +=の文字列結合は遅いので改良する
-	// TODO: 項目指定しなくてすむように汎用化する https://qiita.com/hironobu_s/items/6af7dd739b7aa9453dd5
 	ins := ""
-	for _, v := range resp {
-		//log.Infof(ctx, "%v", v)
-		ins += fmt.Sprintf("('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s'),", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7])
+	for _, record := range records {
+		// 一行ごとに('項目1',..., '最後の項目'), の形でINSERT対象を組み立て
+		ins += "("
+		for i := 0; i < len(record)-1; i++ {
+			ins += fmt.Sprintf("'%s',", record[i])
+		}
+		// 最後の項目だけ後ろに","が不要なので分けて記載
+		ins += fmt.Sprintf("'%s'),", record[len(record)-1])
 	}
 	// 末尾の,を除去
 	ins = strings.TrimRight(ins, ",")
+	//log.Debugf(ctx, "ins: %v", ins)
 
-	log.Infof(ctx, "trying to insert %d dailyprice", len(resp))
-	// INSERT IGNORE INTO daily (code, date, open, high, low, close, turnover, modified) VALUES (...), (),
-	query := fmt.Sprintf("INSERT IGNORE INTO daily (code, date, open, high, low, close, turnover, modified) VALUES %s;", ins)
-	log.Debugf(ctx, "query: %v", query)
+	// 挿入対象の件数
+	targetNum := len(records)
+
+	log.Infof(ctx, "trying to insert %d values to '%s' table.", targetNum, table)
+	// INSERT IGNORE INTO 'table名' (項目名1, 項目名2...) VALUES (...), (...)の形
+	// queryを組み立て
+	query := fmt.Sprintf("INSERT IGNORE INTO %s (", table)
+	for _, c := range columns {
+		query += fmt.Sprintf("%s,", c)
+	}
+	// 末尾の,を除去
+	query = strings.TrimRight(query, ", ")
+	query += fmt.Sprintf(") VALUES %s;", ins)
+
+	//log.Debugf(ctx, "query: %v", query)
 	rows, err := db.Query(query)
 	if err != nil {
 		log.Errorf(ctx, "failed to insert table: %s, err: %v, query: %v", table, err, query)
-		return
+		return 0, err
 	}
-	log.Infof(ctx, "succeded to insert %s", table)
 	defer rows.Close()
+	return targetNum, nil
 }
+
+//// insert対象のtable名、項目名、レコードを引数に取ってDBに書き込む
+//func insertData(r *http.Request, db *sql.DB, table string, columns []string, records [][]interface{}) (int, error) {
+//	ctx := appengine.NewContext(r)
+//
+//	// insert対象を組み立てる
+//	// TODO: +=の文字列結合は遅いので改良する
+//	ins := ""
+//	for _, record := range records {
+//		// 一行ごとに('項目1',..., '最後の項目'), の形でINSERT対象を組み立て
+//		ins += "("
+//		for i := 0; i < len(record)-1; i++ {
+//			ins += fmt.Sprintf("'%s',", record[i])
+//		}
+//		// 最後の項目だけ後ろに","が不要なので分けて記載
+//		ins += fmt.Sprintf("'%s'),", record[len(record)-1])
+//	}
+//	// 末尾の,を除去
+//	ins = strings.TrimRight(ins, ",")
+//	//log.Debugf(ctx, "ins: %v", ins)
+//
+//	// 挿入対象の件数
+//	targetNum := len(records)
+//
+//	log.Infof(ctx, "trying to insert %d values to '%s' table.", targetNum, table)
+//	// INSERT IGNORE INTO 'table名' (項目名1, 項目名2...) VALUES (...), (...)の形
+//	// queryを組み立て
+//	query := fmt.Sprintf("INSERT IGNORE INTO %s (", table)
+//	for _, c := range columns {
+//		query += fmt.Sprintf("%s,", c)
+//	}
+//	// 末尾の,を除去
+//	query = strings.TrimRight(query, ", ")
+//	query += fmt.Sprintf(") VALUES %s;", ins)
+//
+//	//log.Debugf(ctx, "query: %v", query)
+//	rows, err := db.Query(query)
+//	if err != nil {
+//		log.Errorf(ctx, "failed to insert table: %s, err: %v, query: %v", table, err, query)
+//		return 0, err
+//	}
+//	defer rows.Close()
+//	return targetNum, nil
+//}
 
 func insertMovingAvg(r *http.Request, db *sql.DB, table string, code string, dateList []string, mvavg map[int]map[string]float64) {
 	ctx := appengine.NewContext(r)
 
 	// insert対象を組み立てる
 	// TODO: +=の文字列結合は遅いので改良する
-	// TODO: 上のinsertDailyPriceと共通化したい
+	// TODO: 上のinsertDataと共通化したい
 	ins := ""
 	for _, date := range dateList {
 		//		log.Infof(ctx, "code %s, date %s, 5: %v, 20: %v, 60: %v, 100 %v", date, mvavg[5][date], mvavg[20][date], mvavg[60][date], mvavg[100][date])
@@ -88,7 +150,7 @@ func insertMovingAvg(r *http.Request, db *sql.DB, table string, code string, dat
 		log.Errorf(ctx, "failed to insert table: %s, err: %v, query: %v", table, err, query)
 		return
 	}
-	log.Infof(ctx, "succeded to insert %s", table)
+	log.Infof(ctx, "succeeded to insert %s", table)
 	defer rows.Close()
 }
 
