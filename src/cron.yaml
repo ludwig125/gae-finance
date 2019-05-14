@@ -15,8 +15,8 @@ cron:
 #  url: /daily_to_sql
 #  schedule: every day 02:30
 #  timezone: Asia/Tokyo
-- description: "delete daily sheet data, after confirming db"
-  url: /delete_sheet
+- description: "ensure daily data in DB"
+  url: /ensure_daily
   schedule: every day 02:45
   timezone: Asia/Tokyo
 - description: "calculate moving average 5, 20, 60, 100"
