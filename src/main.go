@@ -73,9 +73,14 @@ func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
 		os.Exit(0)
 	}
 
-	// TODO: isBussinessdayでは任意の日付を渡すようにする
+	jst, _ := time.LoadLocation("Asia/Tokyo")
+	now := time.Now().In(jst)
+	// 以下はデバッグ用
+	//now := time.Date(2019, 5, 18, 10, 11, 12, 0, time.Local)
+	log.Infof(ctx, "now %v", now)
+
 	// 休みの日だったら起動しない
-	if !isBussinessday(sheetService, r) {
+	if !isBussinessday(sheetService, r, now) {
 		log.Infof(ctx, "Is not a business day today.")
 		return
 	}
@@ -93,11 +98,6 @@ func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
 	// prod環境の場合は、直近の取引日を取得する
 	// 一日前から順番に見ていって、直近の休日ではない日を取引日として設定する
 	if ENV != "test" {
-		jst, _ := time.LoadLocation("Asia/Tokyo")
-		now := time.Now().In(jst)
-		// 以下はデバッグ用
-		//now := time.Date(2019, 5, 18, 10, 11, 12, 0, time.Local)
-		log.Infof(ctx, "now %v", now)
 		// 直近の営業日を取得
 		// holidayMapには土日が入っていないことがあるのでisSaturdayOrSundayで土日でないかも確認する
 		getPreviousBussinessDay := func() string {
@@ -204,7 +204,12 @@ func indexHandlerDailySql(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Infof(ctx, "Succeeded to get sheet client")
 
-	if !isBussinessday(sheetService, r) {
+	jst, _ := time.LoadLocation("Asia/Tokyo")
+	now := time.Now().In(jst)
+	// 以下はデバッグ用
+	//now := time.Date(2019, 5, 18, 10, 11, 12, 0, time.Local)
+	log.Infof(ctx, "now %v", now)
+	if !isBussinessday(sheetService, r, now) {
 		log.Infof(ctx, "Is not a business day today.")
 		return
 	}
@@ -605,7 +610,10 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		os.Exit(0)
 	}
 
-	if !isBussinessday(sheetService, r) {
+	jst, _ := time.LoadLocation("Asia/Tokyo")
+	now := time.Now().In(jst)
+	log.Infof(ctx, "now %v", now)
+	if !isBussinessday(sheetService, r, now) {
 		log.Infof(ctx, "Is not a business day today.")
 		return
 	}
@@ -695,8 +703,8 @@ func getEnv(r *http.Request) {
 
 }
 
-// TODO: isBussinessdayでは任意の日付を渡すようにする
-func isBussinessday(srv *sheets.Service, r *http.Request) bool {
+// t にはtime.Now()で得られる日付データを渡す
+func isBussinessday(srv *sheets.Service, r *http.Request, t time.Time) bool {
 	ctx := appengine.NewContext(r)
 
 	if ENV == "test" {
@@ -705,21 +713,20 @@ func isBussinessday(srv *sheets.Service, r *http.Request) bool {
 	}
 
 	// 以下はprodの場合
+	log.Infof(ctx, "received date: %v", t)
 
 	// 土日は実行しない
-	jst, _ := time.LoadLocation("Asia/Tokyo")
-	now := time.Now().In(jst)
 	//	d := now.Weekday()
 	//	switch d {
 	//	case 6, 0: // Saturday, Sunday
 	//		return false
 	//	}
-	if isSaturdayOrSunday(now) {
+	if isSaturdayOrSunday(t) {
 		log.Infof(ctx, "Today is Saturday or Sunday.")
 		return false
 	}
 
-	today_ymd := now.Format("2006/01/02")
+	today_ymd := t.Format("2006/01/02")
 
 	holidays := getHolidays(r, srv)
 	for _, row := range holidays {
