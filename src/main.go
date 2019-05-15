@@ -448,19 +448,23 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 	// GAE log
 	ctx := appengine.NewContext(r)
 
-	// TODO: 休日には動かないようにあとでする
-	//	// read environment values
-	//	getEnv(r)
-	//	// spreadsheetのclientを取得
-	//	sheetService, err := getSheetClient(r)
-	//	if err != nil {
-	//		log.Errorf(ctx, "err: %v", err)
-	//		os.Exit(0)
-	//	}
-	//	if !isBussinessday(sheetService, r) {
-	//		log.Infof(ctx, "Is not a business day today.")
-	//		return
-	//	}
+	// read environment values
+	getEnv(r)
+	// spreadsheetのclientを取得
+	sheetService, err := getSheetClient(r)
+	if err != nil {
+		log.Errorf(ctx, "err: %v", err)
+		os.Exit(0)
+	}
+	jst, _ := time.LoadLocation("Asia/Tokyo")
+	now := time.Now().In(jst)
+	// 休日データを取得
+	holidayMap := getHolidaysFromSheet(r, sheetService)
+	// 前の日が休みの日だったら取得すべきデータがないので起動しない
+	if !isPreviousBussinessday(r, now, holidayMap) {
+		log.Infof(ctx, "Previous day is not business day.")
+		return
+	}
 
 	// cloud sql(ローカルの場合はmysql)と接続
 	db, err := dialSql(r)
@@ -616,14 +620,12 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 	// read environment values
 	getEnv(r)
-
 	// spreadsheetのclientを取得
 	sheetService, err := getSheetClient(r)
 	if err != nil {
 		log.Errorf(ctx, "err: %v", err)
 		os.Exit(0)
 	}
-
 	jst, _ := time.LoadLocation("Asia/Tokyo")
 	now := time.Now().In(jst)
 	// 休日データを取得
@@ -719,55 +721,6 @@ func getEnv(r *http.Request) {
 
 }
 
-/*
-// t にはtime.Now()で得られる日付データを渡す
-func isBussinessday(srv *sheets.Service, r *http.Request, t time.Time) bool {
-	ctx := appengine.NewContext(r)
-
-	if ENV == "test" {
-		// test環境は常にtrue
-		return true
-	}
-
-	// 以下はprodの場合
-	log.Infof(ctx, "received date: %v", t)
-
-	// 土日は実行しない
-	//	d := now.Weekday()
-	//	switch d {
-	//	case 6, 0: // Saturday, Sunday
-	//		return false
-	//	}
-	if isSaturdayOrSunday(t) {
-		log.Infof(ctx, "Today is Saturday or Sunday.")
-		return false
-	}
-
-	today_ymd := t.Format("2006/01/02")
-
-	holidays := getHolidaysFromSheet(r, srv)
-	for _, row := range holidays {
-		holiday := row[0].(string)
-		if holiday == today_ymd {
-			log.Infof(ctx, "Today is holiday.")
-			return false
-		}
-	}
-	return true
-
-}
-*/
-
-/*
-func isSaturdayOrSunday(t time.Time) bool {
-	day := t.Weekday()
-	switch day {
-	case 6, 0: // Saturday, Sunday
-		return true
-	}
-	return false
-}
-*/
 // spreadsheetの'holiday' sheetを読み取って、{"2019/01/01", true}のような祝日のMapを作成して返す
 func getHolidaysFromSheet(r *http.Request, srv *sheets.Service) map[string]bool {
 	ctx := appengine.NewContext(r)
