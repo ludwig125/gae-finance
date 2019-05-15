@@ -16,7 +16,7 @@ import (
 // spreadsheets clientを取得
 func getSheetClient(r *http.Request) (*sheets.Service, error) {
 	// googleAPIへのclientをリクエストから作成
-	client := getClientWithJson(r)
+	client := getClientWithJSON(r)
 	// spreadsheets clientを取得
 	srv, err := sheets.New(client)
 	if err != nil {
@@ -25,7 +25,7 @@ func getSheetClient(r *http.Request) (*sheets.Service, error) {
 	return srv, nil
 }
 
-func getClientWithJson(r *http.Request) *http.Client {
+func getClientWithJSON(r *http.Request) *http.Client {
 	// リクエストからcontextを作成
 	// GAE log
 	ctx := appengine.NewContext(r)
@@ -44,7 +44,7 @@ func getClientWithJson(r *http.Request) *http.Client {
 	return conf.Client(ctx)
 }
 
-func getSheetData(r *http.Request, srv *sheets.Service, sheetId string, readRange string) [][]interface{} {
+func getSheetData(r *http.Request, srv *sheets.Service, sheetID string, readRange string) [][]interface{} {
 	ctx := appengine.NewContext(r)
 
 	var MaxRetries = 3
@@ -57,7 +57,7 @@ func getSheetData(r *http.Request, srv *sheets.Service, sheetId string, readRang
 		}
 		attempt = attempt + 1
 		// stockpriceシートからデータを取得
-		resp, err := srv.Spreadsheets.Values.Get(sheetId, readRange).Do()
+		resp, err := srv.Spreadsheets.Values.Get(sheetID, readRange).Do()
 		if err != nil {
 			log.Warningf(ctx, "Unable to retrieve data from sheet: %v. attempt: %d", err, attempt)
 			time.Sleep(1 * time.Second) // 1秒待つ
