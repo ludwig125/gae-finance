@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
 	//"sync"
 	"time"
 
@@ -67,7 +68,7 @@ func dailyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 100件ずつ(test環境は10件)スクレイピングしてSheetに書き込み
 	// 最初に環境変数を読み込む
-	MAX_SHEET_INSERT, err := strconv.Atoi(mustGetenv(r, "MAX_SHEET_INSERT"))
+	maxSheetInsertNum, err := strconv.Atoi(mustGetenv(r, "MAX_SHEET_INSERT"))
 	if err != nil {
 		log.Errorf(ctx, "failed to get MAX_SHEET_INSERT. err: %v", err)
 		os.Exit(0)
@@ -95,14 +96,14 @@ func dailyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// spreadsheetから銘柄コードを取得
 	//codes := readCode(sheetService, r, "ichibu")
-	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
+	codes := getSheetData(r, sheetService, codeSheetID, "ichibu")
 	if codes == nil || len(codes) == 0 {
 		log.Infof(ctx, "No target data.")
 		os.Exit(0)
 	}
 
 	// cloud sql(ローカルの場合はmysql)と接続
-	db, err := dialSql(r)
+	db, err := dialSQL(r)
 	if err != nil {
 		log.Errorf(ctx, "Could not open db: %v", err)
 		os.Exit(0)
@@ -119,8 +120,8 @@ func dailyHandler(w http.ResponseWriter, r *http.Request) {
 
 	//log.Infof(ctx, "db %T", db)
 	length := len(codes)
-	for begin := 0; begin < length; begin += MAX_SHEET_INSERT {
-		end := begin + MAX_SHEET_INSERT
+	for begin := 0; begin < length; begin += maxSheetInsertNum {
+		end := begin + maxSheetInsertNum
 		if end >= length {
 			end = length
 		}
@@ -209,7 +210,7 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// cloud sql(ローカルの場合はmysql)と接続
-	db, err := dialSql(r)
+	db, err := dialSQL(r)
 	if err != nil {
 		log.Errorf(ctx, "Could not open db: %v", err)
 		os.Exit(0)
@@ -380,7 +381,7 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 	// spreadsheetから銘柄コードを取得
 	//codes := readCode(sheetService, r, "code")
-	codes := getSheetData(r, sheetService, CODE_SHEETID, "code")
+	codes := getSheetData(r, sheetService, codeSheetID, "code")
 	if codes == nil || len(codes) == 0 {
 		//if len(codes) == 0 {
 		log.Infof(ctx, "No target data.")
@@ -403,14 +404,14 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(1 * time.Second) // 1秒待つ
 	}
 	// spreadsheetから株価を取得する
-	resp := getSheetData(r, sheetService, STOCKPRICE_SHEETID, "stockprice")
+	resp := getSheetData(r, sheetService, stockPriceSheetID, "stockprice")
 	if resp == nil {
 		log.Infof(ctx, "No data")
 		return
 	}
 
 	// 全codeの株価比率
-	var whole_codeRate []codeRate
+	var wholeCodeRate []codeRate
 	for _, row := range codes {
 		code := row[0].(string)
 		//直近7時間の増減率を取得する
@@ -419,47 +420,45 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 			log.Warningf(ctx, "%v\n", err)
 			continue
 		}
-		whole_codeRate = append(whole_codeRate, codeRate{code, rate})
+		wholeCodeRate = append(wholeCodeRate, codeRate{code, rate})
 	}
-	log.Infof(ctx, "count whole code %v\n", len(whole_codeRate))
+	log.Infof(ctx, "count whole code %v\n", len(wholeCodeRate))
 
 	// 一つ前との比率が一番大きいもの順にソート
-	sort.SliceStable(whole_codeRate, func(i, j int) bool { return whole_codeRate[i].Rate[0] > whole_codeRate[j].Rate[0] })
-	fmt.Fprintln(w, whole_codeRate)
+	sort.SliceStable(wholeCodeRate, func(i, j int) bool { return wholeCodeRate[i].Rate[0] > wholeCodeRate[j].Rate[0] })
+	fmt.Fprintln(w, wholeCodeRate)
 
 	// 事前にrateのシートをclear
-	clearSheet(sheetService, r, RATE_SHEETID, "rate")
+	clearSheet(sheetService, r, rateSheetID, "rate")
 
 	// 株価の比率順にソートしたものを書き込み
-	writeRate(sheetService, r, whole_codeRate, RATE_SHEETID, "rate")
+	writeRate(sheetService, r, wholeCodeRate, rateSheetID, "rate")
 }
 
 var (
-	CODE_SHEETID       string
-	DAILYPRICE_SHEETID string
-	ENV                string
-	HOLIDAY_SHEETID    string
-	STOCKPRICE_SHEETID string
-	DAILYRATE_SHEETID  string
-	RATE_SHEETID       string
+	codeSheetID       string
+	runEnv            string
+	holidaySheetID    string
+	stockPriceSheetID string
+	dailyRateSheetID  string
+	rateSheetID       string
 )
 
 func getEnv(r *http.Request) {
 	ctx := appengine.NewContext(r)
 	// 環境変数から読み込む
 
-	CODE_SHEETID = mustGetenv(r, "CODE_SHEETID")
-	DAILYPRICE_SHEETID = mustGetenv(r, "DAILYPRICE_SHEETID")
-	ENV = mustGetenv(r, "ENV")
-	if ENV != "test" && ENV != "prod" {
-		// ENVがprodでもtestでもない場合は異常終了
-		log.Errorf(ctx, "ENV must be 'test' or 'prod': %v", ENV)
+	codeSheetID = mustGetenv(r, "CODE_SHEETID")
+	runEnv = mustGetenv(r, "ENV")
+	if runEnv != "test" && runEnv != "prod" {
+		// runEnvがprodでもtestでもない場合は異常終了
+		log.Errorf(ctx, "ENV must be 'test' or 'prod': %v", runEnv)
 		os.Exit(0)
 	}
-	HOLIDAY_SHEETID = mustGetenv(r, "HOLIDAY_SHEETID")
-	STOCKPRICE_SHEETID = mustGetenv(r, "STOCKPRICE_SHEETID")
-	DAILYRATE_SHEETID = mustGetenv(r, "DAILYRATE_SHEETID")
-	RATE_SHEETID = mustGetenv(r, "RATE_SHEETID")
+	holidaySheetID = mustGetenv(r, "HOLIDAY_SHEETID")
+	stockPriceSheetID = mustGetenv(r, "STOCKPRICE_SHEETID")
+	dailyRateSheetID = mustGetenv(r, "DAILYRATE_SHEETID")
+	rateSheetID = mustGetenv(r, "RATE_SHEETID")
 
 }
 
@@ -469,7 +468,7 @@ func getHolidaysFromSheet(r *http.Request, srv *sheets.Service) map[string]bool 
 	// 'holiday' sheet を読み取り
 	// sheetには「2019/01/01」の形式の休日が縦一列になっていることを想定している
 	// 東京証券取引所の休日: https://www.jpx.co.jp/corporate/calendar/index.html
-	holidays := getSheetData(r, srv, HOLIDAY_SHEETID, "holiday")
+	holidays := getSheetData(r, srv, holidaySheetID, "holiday")
 	if holidays == nil || len(holidays) == 0 {
 		log.Infof(ctx, "Failed to get holidays.")
 		os.Exit(0)
@@ -491,7 +490,7 @@ func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
 	}
 
 	// date と priceを取得
-	var date_price [][]string
+	var datePrice [][]string
 	doc.Find(".m-tableType01_table table tbody tr").Each(func(i int, s *goquery.Selection) {
 		date := s.Find(".a-taC").Text()
 		re := regexp.MustCompile(`[0-9]+/[0-9]+`).Copy()
@@ -508,19 +507,19 @@ func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
 			arr = append(arr, strings.Replace(s2.Text(), ",", "", -1))
 		})
 		// 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値を一行ごとに格納
-		date_price = append(date_price, arr)
+		datePrice = append(datePrice, arr)
 	})
-	if len(date_price) == 0 {
+	if len(datePrice) == 0 {
 		return nil, fmt.Errorf("%s no data", code)
 	}
-	if len(date_price[0]) != 7 {
+	if len(datePrice[0]) != 7 {
 		// 以下の７要素を取れなかったら何かおかしい
 		// 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値
 		// リダイレクトされて別のページに飛ばされている可能性もある
 		// 失敗した銘柄を返す
 		return nil, fmt.Errorf("%s doesn't have enough elems", code)
 	}
-	return date_price, nil
+	return datePrice, nil
 }
 
 func formatDate(date string) string {
@@ -540,14 +539,14 @@ func formatDate(date string) string {
 	m, _ := strconv.Atoi(month)
 
 	// スクレイピングしたデータを月と日に分ける
-	date_md := strings.Split(date, "/")
-	date_m, _ := strconv.Atoi(date_md[0])
-	date_d, _ := strconv.Atoi(date_md[1])
+	fetchedMonthDate := strings.Split(date, "/")
+	fetchedMonth, _ := strconv.Atoi(fetchedMonthDate[0])
+	fetchedDate, _ := strconv.Atoi(fetchedMonthDate[1])
 
 	var buffer = bytes.NewBuffer(make([]byte, 0, 30))
 	// スクレイピングしたデータが現在の月より先なら前の年のデータ
 	// ex. 1月にスクレイピングしたデータに12月が含まれていたら前年のはず
-	if date_m > m {
+	if fetchedMonth > m {
 		buffer.WriteString(strconv.Itoa(y - 1))
 	} else {
 		buffer.WriteString(year)
@@ -555,10 +554,10 @@ func formatDate(date string) string {
 	// あらためて年/月/日の形にして返す
 	buffer.WriteString("/")
 	// 2桁になるようにゼロパティング
-	buffer.WriteString(fmt.Sprintf("%02d", date_m))
+	buffer.WriteString(fmt.Sprintf("%02d", fetchedMonth))
 	buffer.WriteString("/")
 	// 2桁になるようにゼロパティング
-	buffer.WriteString(fmt.Sprintf("%02d", date_d))
+	buffer.WriteString(fmt.Sprintf("%02d", fetchedDate))
 	return buffer.String()
 }
 
@@ -577,7 +576,7 @@ func doScrape(r *http.Request, code string) (string, string, error) {
 		price = s.Find(".item1").Text()
 	})
 	// 必要な形に整形して返す
-	d, err := getFormatedDate(time, r)
+	d, err := getFormatedDate(time)
 	if err != nil {
 		return "", "", err // 変換できない時は戻る
 	}
@@ -592,17 +591,17 @@ func fetchWebpageDoc(r *http.Request, urlname string, code string) (*goquery.Doc
 	ctx := appengine.NewContext(r)
 	client := urlfetch.Client(ctx)
 
-	base_url := ""
+	baseURL := ""
 	// リクエスト対象のURLを環境変数から読み込む
 	if v := os.Getenv(urlname); v != "" {
-		base_url = v
+		baseURL = v
 	} else {
-		log.Errorf(ctx, "Failed to get base_url. '%v'", v)
+		log.Errorf(ctx, "Failed to get baseURL. '%v'", v)
 		os.Exit(0)
 	}
 
 	// Request the HTML page.
-	url := base_url + code
+	url := baseURL + code
 	//res, err := http.Get(url)
 	res, err := client.Get(url)
 	if err != nil {
@@ -622,7 +621,7 @@ func fetchWebpageDoc(r *http.Request, urlname string, code string) (*goquery.Doc
 	return doc, nil
 }
 
-func getFormatedDate(s string, r *http.Request) (string, error) {
+func getFormatedDate(s string) (string, error) {
 	hour, min, err := getHourMin(s) // スクレイピングの結果から時刻を取得
 	if err != nil {
 		return "", err // 変換できない時は戻る
@@ -703,7 +702,7 @@ func writeStockprice(srv *sheets.Service, r *http.Request, code string, date str
 	}
 	var MaxRetries = 3
 	for attempt := 0; attempt < MaxRetries; attempt++ {
-		resp, err := srv.Spreadsheets.Values.Append(STOCKPRICE_SHEETID, "stockprice", valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
+		resp, err := srv.Spreadsheets.Values.Append(stockPriceSheetID, "stockprice", valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
 		if err != nil {
 			log.Warningf(ctx, "Unable to write value. %v. attempt: %d", err, attempt)
 			time.Sleep(3 * time.Second) // 3秒待つ
@@ -802,7 +801,7 @@ func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
 	previousBussinessDay := "2018/09/18"
 	// prod環境の場合は、直近の取引日を取得する
 	// 一日前から順番に見ていって、直近の休日ではない日を取引日として設定する
-	if ENV != "test" {
+	if runEnv != "test" {
 		// 直近の営業日を取得
 		previos, err := getPreviousBussinessDay(now, holidayMap)
 		if err != nil {
@@ -816,7 +815,7 @@ func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
 	// あとで全銘柄と比較するためにDBの直近の取引日のデータに含まれる銘柄を取得してmapに格納
 	codesInDb := func() map[int]bool {
 		// cloud sql(ローカルの場合はmysql)と接続
-		db, err := dialSql(r)
+		db, err := dialSQL(r)
 		if err != nil {
 			log.Errorf(ctx, "Could not open db: %v", err)
 			os.Exit(0)
@@ -839,7 +838,7 @@ func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
 	dbCodesMap := codesInDb()
 
 	// spreadsheetから銘柄コードを取得
-	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
+	codes := getSheetData(r, sheetService, codeSheetID, "ichibu")
 	if codes == nil || len(codes) == 0 {
 		log.Errorf(ctx, "failed to fetch sheetdata. err: '%v'.", codes)
 		os.Exit(0)
@@ -870,7 +869,7 @@ func isPreviousBussinessday(r *http.Request, t time.Time, holidayMap map[string]
 	ctx := appengine.NewContext(r)
 
 	log.Infof(ctx, "Is previous day Bussinessday? Received date: %v", t)
-	if ENV == "test" {
+	if runEnv == "test" {
 		// test環境は常にtrue
 		log.Infof(ctx, "This is test env. no need to check.")
 		return true

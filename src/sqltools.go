@@ -14,7 +14,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 )
 
-func dialSql(r *http.Request) (*sql.DB, error) {
+func dialSQL(r *http.Request) (*sql.DB, error) {
 	ctx := appengine.NewContext(r)
 
 	p := ""
