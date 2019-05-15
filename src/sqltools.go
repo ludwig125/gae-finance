@@ -82,50 +82,6 @@ func insertDataStrings(r *http.Request, db *sql.DB, table string, columns []stri
 	return targetNum, nil
 }
 
-//// insert対象のtable名、項目名、レコードを引数に取ってDBに書き込む
-//func insertData(r *http.Request, db *sql.DB, table string, columns []string, records [][]interface{}) (int, error) {
-//	ctx := appengine.NewContext(r)
-//
-//	// insert対象を組み立てる
-//	// TODO: +=の文字列結合は遅いので改良する
-//	ins := ""
-//	for _, record := range records {
-//		// 一行ごとに('項目1',..., '最後の項目'), の形でINSERT対象を組み立て
-//		ins += "("
-//		for i := 0; i < len(record)-1; i++ {
-//			ins += fmt.Sprintf("'%s',", record[i])
-//		}
-//		// 最後の項目だけ後ろに","が不要なので分けて記載
-//		ins += fmt.Sprintf("'%s'),", record[len(record)-1])
-//	}
-//	// 末尾の,を除去
-//	ins = strings.TrimRight(ins, ",")
-//	//log.Debugf(ctx, "ins: %v", ins)
-//
-//	// 挿入対象の件数
-//	targetNum := len(records)
-//
-//	log.Infof(ctx, "trying to insert %d values to '%s' table.", targetNum, table)
-//	// INSERT IGNORE INTO 'table名' (項目名1, 項目名2...) VALUES (...), (...)の形
-//	// queryを組み立て
-//	query := fmt.Sprintf("INSERT IGNORE INTO %s (", table)
-//	for _, c := range columns {
-//		query += fmt.Sprintf("%s,", c)
-//	}
-//	// 末尾の,を除去
-//	query = strings.TrimRight(query, ", ")
-//	query += fmt.Sprintf(") VALUES %s;", ins)
-//
-//	//log.Debugf(ctx, "query: %v", query)
-//	rows, err := db.Query(query)
-//	if err != nil {
-//		log.Errorf(ctx, "failed to insert table: %s, err: %v, query: %v", table, err, query)
-//		return 0, err
-//	}
-//	defer rows.Close()
-//	return targetNum, nil
-//}
-
 func insertMovingAvg(r *http.Request, db *sql.DB, table string, code string, dateList []string, mvavg map[int]map[string]float64) {
 	ctx := appengine.NewContext(r)
 
