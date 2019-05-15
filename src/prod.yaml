@@ -18,7 +18,6 @@ env_variables:
   CODE_SHEETID: "1ExUKJy5SfKb62wycg1jOiHHeQ1t3hGyE2Vau5RkKzfk"
   DAILY_PRICE_URL: "https://www.nikkei.com/nkd/company/history/dprice/?scode="
   HOURLY_PRICE_URL: "https://www.nikkei.com/smartchart/?code="
-  DAILYPRICE_SHEETID: "1iUdQDefKtwXzWUOWdZfqF9H9QBy5YIAec65427CdjNQ"
   STOCKPRICE_SHEETID: "1FcwyVrMIZ5xGrFaJvIg0SVpJPsf9Q7WabVxBXRxpUZA"
   RATE_SHEETID: "1ZQK1SdjLS0ZCrKL_0A2jrbG-nxEcf-h4UIDgXAXCfMM"
   DAILYRATE_SHEETID: "14rZ4HXGsr1tEejPO_SngOu1llAwqO6gUcKeygZa4FbA"
