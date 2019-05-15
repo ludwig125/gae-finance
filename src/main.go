@@ -725,6 +725,7 @@ func getEnv(r *http.Request) {
 func getHolidaysFromSheet(r *http.Request, srv *sheets.Service) map[string]bool {
 	ctx := appengine.NewContext(r)
 	// 'holiday' sheet を読み取り
+	// sheetには「2019/01/01」の形式の休日が縦一列になっていることを想定している
 	// 東京証券取引所の休日: https://www.jpx.co.jp/corporate/calendar/index.html
 	holidays := getSheetData(r, srv, HOLIDAY_SHEETID, "holiday")
 	if holidays == nil || len(holidays) == 0 {
