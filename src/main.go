@@ -103,7 +103,7 @@ func dailyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// cloud sql(ローカルの場合はmysql)と接続
-	db, err := dialSql(r)
+	db, err := dialSQL(r)
 	if err != nil {
 		log.Errorf(ctx, "Could not open db: %v", err)
 		os.Exit(0)
@@ -210,7 +210,7 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// cloud sql(ローカルの場合はmysql)と接続
-	db, err := dialSql(r)
+	db, err := dialSQL(r)
 	if err != nil {
 		log.Errorf(ctx, "Could not open db: %v", err)
 		os.Exit(0)
@@ -492,7 +492,7 @@ func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
 	}
 
 	// date と priceを取得
-	var date_price [][]string
+	var datePrice [][]string
 	doc.Find(".m-tableType01_table table tbody tr").Each(func(i int, s *goquery.Selection) {
 		date := s.Find(".a-taC").Text()
 		re := regexp.MustCompile(`[0-9]+/[0-9]+`).Copy()
@@ -509,19 +509,19 @@ func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
 			arr = append(arr, strings.Replace(s2.Text(), ",", "", -1))
 		})
 		// 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値を一行ごとに格納
-		date_price = append(date_price, arr)
+		datePrice = append(datePrice, arr)
 	})
-	if len(date_price) == 0 {
+	if len(datePrice) == 0 {
 		return nil, fmt.Errorf("%s no data", code)
 	}
-	if len(date_price[0]) != 7 {
+	if len(datePrice[0]) != 7 {
 		// 以下の７要素を取れなかったら何かおかしい
 		// 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値
 		// リダイレクトされて別のページに飛ばされている可能性もある
 		// 失敗した銘柄を返す
 		return nil, fmt.Errorf("%s doesn't have enough elems", code)
 	}
-	return date_price, nil
+	return datePrice, nil
 }
 
 func formatDate(date string) string {
@@ -541,14 +541,14 @@ func formatDate(date string) string {
 	m, _ := strconv.Atoi(month)
 
 	// スクレイピングしたデータを月と日に分ける
-	date_md := strings.Split(date, "/")
-	date_m, _ := strconv.Atoi(date_md[0])
-	date_d, _ := strconv.Atoi(date_md[1])
+	fetchedMonthDate := strings.Split(date, "/")
+	fetchedMonth, _ := strconv.Atoi(fetchedMonthDate[0])
+	fetchedDate, _ := strconv.Atoi(fetchedMonthDate[1])
 
 	var buffer = bytes.NewBuffer(make([]byte, 0, 30))
 	// スクレイピングしたデータが現在の月より先なら前の年のデータ
 	// ex. 1月にスクレイピングしたデータに12月が含まれていたら前年のはず
-	if date_m > m {
+	if fetchedMonth > m {
 		buffer.WriteString(strconv.Itoa(y - 1))
 	} else {
 		buffer.WriteString(year)
@@ -556,10 +556,10 @@ func formatDate(date string) string {
 	// あらためて年/月/日の形にして返す
 	buffer.WriteString("/")
 	// 2桁になるようにゼロパティング
-	buffer.WriteString(fmt.Sprintf("%02d", date_m))
+	buffer.WriteString(fmt.Sprintf("%02d", fetchedMonth))
 	buffer.WriteString("/")
 	// 2桁になるようにゼロパティング
-	buffer.WriteString(fmt.Sprintf("%02d", date_d))
+	buffer.WriteString(fmt.Sprintf("%02d", fetchedDate))
 	return buffer.String()
 }
 
@@ -593,17 +593,17 @@ func fetchWebpageDoc(r *http.Request, urlname string, code string) (*goquery.Doc
 	ctx := appengine.NewContext(r)
 	client := urlfetch.Client(ctx)
 
-	base_url := ""
+	baseURL := ""
 	// リクエスト対象のURLを環境変数から読み込む
 	if v := os.Getenv(urlname); v != "" {
-		base_url = v
+		baseURL = v
 	} else {
-		log.Errorf(ctx, "Failed to get base_url. '%v'", v)
+		log.Errorf(ctx, "Failed to get baseURL. '%v'", v)
 		os.Exit(0)
 	}
 
 	// Request the HTML page.
-	url := base_url + code
+	url := baseURL + code
 	//res, err := http.Get(url)
 	res, err := client.Get(url)
 	if err != nil {
@@ -817,7 +817,7 @@ func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
 	// あとで全銘柄と比較するためにDBの直近の取引日のデータに含まれる銘柄を取得してmapに格納
 	codesInDb := func() map[int]bool {
 		// cloud sql(ローカルの場合はmysql)と接続
-		db, err := dialSql(r)
+		db, err := dialSQL(r)
 		if err != nil {
 			log.Errorf(ctx, "Could not open db: %v", err)
 			os.Exit(0)
