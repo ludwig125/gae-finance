@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
@@ -35,10 +36,10 @@ type dateClose struct {
 func main() {
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", dailyHandler)
-	//http.HandleFunc("/calc_daily", indexHandlerCalcDailyOld)
 	http.HandleFunc("/movingavg", movingAvgHandler)
-	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/ensure_daily", ensureDailyDBHandler)
+	http.HandleFunc("/calc", calcHandler)
+	http.HandleFunc("/", indexHandler)
 	appengine.Main() // Starts the server to receive requests
 }
 
@@ -46,6 +47,34 @@ func main() {
 func start(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
 	log.Infof(c, "STARTING")
+}
+
+// TODO: 他のHandlerでもこれを最初に読み込むようにしたい
+// 環境変数の読み込み、SheetやDBのClientの取得をする
+func initialize(r *http.Request) (*sheets.Service, *sql.DB, error) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	// read environment values
+	getEnv(r)
+
+	// spreadsheetのclientを取得
+	sheetService, err := getSheetClient(r)
+	if err != nil {
+		log.Errorf(ctx, "failed to get sheet client. err: %v", err)
+		return nil, nil, err
+	}
+	log.Infof(ctx, "succeeded to get sheet client")
+
+	// cloud sql(ローカルの場合はmysql)と接続
+	db, err := dialSQL(r)
+	if err != nil {
+		log.Errorf(ctx, "failed to open db. err: %v", err)
+		return nil, nil, err
+	}
+	log.Infof(ctx, "succeeded to open db")
+
+	return sheetService, db, nil
 }
 
 func mustGetenv(r *http.Request, k string) string {
@@ -336,20 +365,29 @@ func movingAverage(dcs []dateClose, avgDays int) map[string]float64 {
 	return dateMovingMap
 }
 
-func codeDateModprice(r *http.Request, resp [][]interface{}) [][]interface{} {
-	//ctx := appengine.NewContext(r)
-	matrix := make([][]interface{}, 0)
-	for _, v := range resp {
-		//log.Infof(ctx, "%v %v %v\n", v[0], v[1], v[len(v)-1])
-		cdmp := []interface{}{
-			interface{}(v[0]),        // 銘柄
-			interface{}(v[1]),        // 日付
-			interface{}(v[len(v)-1]), // 調整後終値
-		}
-		matrix = append(matrix, cdmp)
+func calcHandler(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	// get environment var, sheet, db
+	sheet, db, err := initialize(r)
+	if err != nil {
+		log.Errorf(ctx, "failed to initialize. err: %v", err)
+		os.Exit(0)
 	}
-	//log.Infof(ctx, "%v\n", matrix)
-	return matrix
+
+	log.Infof(ctx, "succeeded to initialize. got environment var, sheet, db.")
+	log.Infof(ctx, "%v %v", sheet, db)
+
+	jst, _ := time.LoadLocation("Asia/Tokyo")
+	now := time.Now().In(jst)
+	// 休日データを取得
+	holidayMap := getHolidaysFromSheet(r, sheet)
+	// 前の日が休みの日だったら取得すべきデータがないので起動しない
+	if !isPreviousBussinessday(r, now, holidayMap) {
+		log.Infof(ctx, "Previous day is not business day.")
+		return
+	}
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
