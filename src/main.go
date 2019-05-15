@@ -64,7 +64,7 @@ func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
 	// 環境変数を最初に読み込み
 	getEnv(r)
 
-	log.Infof(ctx, "delete daily sheet data")
+	log.Infof(ctx, "ensure daily data")
 
 	// spreadsheetのclientを取得
 	sheetService, err := getSheetClient(r)
@@ -77,47 +77,28 @@ func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().In(jst)
 	// 以下はデバッグ用
 	//now := time.Date(2019, 5, 18, 10, 11, 12, 0, time.Local)
-	log.Infof(ctx, "now %v", now)
-
-	// 休みの日だったら起動しない
-	if !isBussinessday(sheetService, r, now) {
-		log.Infof(ctx, "Is not a business day today.")
+	// 休日データを取得
+	holidayMap := getHolidaysFromSheet(r, sheetService)
+	// 前の日が休みの日だったら取得すべきデータがないので起動しない
+	if !isPreviousBussinessday(r, now, holidayMap) {
+		log.Infof(ctx, "Previous day is not business day.")
 		return
 	}
 
-	// 休日データを取得
-	holidays := getHolidays(r, sheetService)
-	holidayMap := map[string]bool{}
-	for _, row := range holidays {
-		holiday := row[0].(string)
-		holidayMap[holiday] = true
-	}
-
-	// test環境のスプレッドシートデータの最新の日付に合わせる
+	// test環境ではデータの存在する最新の日付に合わせる
 	previousBussinessDay := "2018/09/18"
 	// prod環境の場合は、直近の取引日を取得する
 	// 一日前から順番に見ていって、直近の休日ではない日を取引日として設定する
 	if ENV != "test" {
 		// 直近の営業日を取得
-		// holidayMapには土日が入っていないことがあるのでisSaturdayOrSundayで土日でないかも確認する
-		getPreviousBussinessDay := func() string {
-			// 無限ループは嫌なので直近30日間見て取引日が見つからなかったら""を返して失敗
-			for i := 1; i <= 30; i++ {
-				previousTime := now.AddDate(0, 0, -i)
-				previousDate := previousTime.Format("2006/01/02")
-				if !holidayMap[previousDate] && !isSaturdayOrSunday(previousTime) {
-					return previousDate
-				}
-			}
-			return ""
-		}
-		previousBussinessDay = getPreviousBussinessDay()
-		if previousBussinessDay == "" {
-			log.Errorf(ctx, "there are no previous bussinessdays")
+		previos, err := getPreviousBussinessDay(now, holidayMap)
+		if err != nil {
+			log.Errorf(ctx, "failed to getPreviousBussinessDay. %v", err)
 			os.Exit(0)
 		}
-		log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
+		previousBussinessDay = previos
 	}
+	log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
 
 	// あとで全銘柄と比較するためにDBの直近の取引日のデータに含まれる銘柄を取得してmapに格納
 	codesInDb := func() map[int]bool {
@@ -170,6 +151,37 @@ func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
 	log.Infof(ctx, "succeeded to write all %d codes data to db.", len(dbCodesMap))
 }
 
+// 与えられた日付の前日が取引日かどうかを判定する関数
+// 実行時の日付time.Now().In(jst)と休日のMapを渡す
+func isPreviousBussinessday(r *http.Request, t time.Time, holidayMap map[string]bool) bool {
+	ctx := appengine.NewContext(r)
+
+	log.Infof(ctx, "Is previous day Bussinessday? Received date: %v", t)
+	if ENV == "test" {
+		// test環境は常にtrue
+		log.Infof(ctx, "This is test env. no need to check.")
+		return true
+	}
+
+	// 以下はprodの場合
+
+	// 直近の営業日を取得
+	previousBussinessDay, err := getPreviousBussinessDay(t, holidayMap)
+	if err != nil {
+		log.Errorf(ctx, "failed to getPreviousBussinessDay. %v", err)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
+
+	// 日付を１日ずらすためにtime.Time型に修正してから計算
+	previousTime, _ := time.Parse("2006/01/02", previousBussinessDay)
+	previousTimeNextDay := previousTime.AddDate(0, 0, 1)
+	if t.Format("2006/01/02") == previousTimeNextDay.Format("2006/01/02") {
+		log.Infof(ctx, "previous day is BussinessDay.")
+		return true
+	}
+	return false
+}
 func mustGetenv(r *http.Request, k string) string {
 	ctx := appengine.NewContext(r)
 	v := os.Getenv(k)
@@ -208,9 +220,11 @@ func indexHandlerDailySql(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().In(jst)
 	// 以下はデバッグ用
 	//now := time.Date(2019, 5, 18, 10, 11, 12, 0, time.Local)
-	log.Infof(ctx, "now %v", now)
-	if !isBussinessday(sheetService, r, now) {
-		log.Infof(ctx, "Is not a business day today.")
+	// 休日データを取得
+	holidayMap := getHolidaysFromSheet(r, sheetService)
+	// 前の日が休みの日だったら取得すべきデータがないので起動しない
+	if !isPreviousBussinessday(r, now, holidayMap) {
+		log.Infof(ctx, "Previous day is not business day.")
 		return
 	}
 
@@ -612,9 +626,11 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 
 	jst, _ := time.LoadLocation("Asia/Tokyo")
 	now := time.Now().In(jst)
-	log.Infof(ctx, "now %v", now)
-	if !isBussinessday(sheetService, r, now) {
-		log.Infof(ctx, "Is not a business day today.")
+	// 休日データを取得
+	holidayMap := getHolidaysFromSheet(r, sheetService)
+	// 前の日が休みの日だったら取得すべきデータがないので起動しない
+	if !isPreviousBussinessday(r, now, holidayMap) {
+		log.Infof(ctx, "Previous day is not business day.")
 		return
 	}
 
@@ -703,6 +719,7 @@ func getEnv(r *http.Request) {
 
 }
 
+/*
 // t にはtime.Now()で得られる日付データを渡す
 func isBussinessday(srv *sheets.Service, r *http.Request, t time.Time) bool {
 	ctx := appengine.NewContext(r)
@@ -728,7 +745,7 @@ func isBussinessday(srv *sheets.Service, r *http.Request, t time.Time) bool {
 
 	today_ymd := t.Format("2006/01/02")
 
-	holidays := getHolidays(r, srv)
+	holidays := getHolidaysFromSheet(r, srv)
 	for _, row := range holidays {
 		holiday := row[0].(string)
 		if holiday == today_ymd {
@@ -739,7 +756,9 @@ func isBussinessday(srv *sheets.Service, r *http.Request, t time.Time) bool {
 	return true
 
 }
+*/
 
+/*
 func isSaturdayOrSunday(t time.Time) bool {
 	day := t.Weekday()
 	switch day {
@@ -748,8 +767,9 @@ func isSaturdayOrSunday(t time.Time) bool {
 	}
 	return false
 }
-
-func getHolidays(r *http.Request, srv *sheets.Service) [][]interface{} {
+*/
+// spreadsheetの'holiday' sheetを読み取って、{"2019/01/01", true}のような祝日のMapを作成して返す
+func getHolidaysFromSheet(r *http.Request, srv *sheets.Service) map[string]bool {
 	ctx := appengine.NewContext(r)
 	// 'holiday' sheet を読み取り
 	// 東京証券取引所の休日: https://www.jpx.co.jp/corporate/calendar/index.html
@@ -758,7 +778,13 @@ func getHolidays(r *http.Request, srv *sheets.Service) [][]interface{} {
 		log.Infof(ctx, "Failed to get holidays.")
 		os.Exit(0)
 	}
-	return holidays
+	holidayMap := map[string]bool{}
+	// [][]interface{}型のholidaysを読み取り、holidayはtrueとなるMapを作成
+	for _, row := range holidays {
+		holiday := row[0].(string)
+		holidayMap[holiday] = true
+	}
+	return holidayMap
 }
 
 func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
