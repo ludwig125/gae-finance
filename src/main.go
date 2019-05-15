@@ -19,12 +19,6 @@ import (
 	"google.golang.org/appengine/urlfetch" // 外部にhttpするため
 )
 
-//// codeごとの株価 スクレイピングした時のcode毎のデータがPriceに入る
-//type codePrice struct {
-//	Code  string
-//	Price []string
-//}
-
 // codeごとの株価比率
 type codeRate struct {
 	Code string
@@ -39,10 +33,7 @@ type dateClose struct {
 
 func main() {
 	http.HandleFunc("/_ah/start", start)
-	//http.HandleFunc("/daily", indexHandlerDaily)
-
-	// TODO: dailyで呼び出す関数の名前をindexHandlerDailyにする
-	http.HandleFunc("/daily", indexHandlerDailySql)
+	http.HandleFunc("/daily", dailyHandler)
 	//http.HandleFunc("/calc_daily", indexHandlerCalcDailyOld)
 	http.HandleFunc("/movingavg", movingAvgHandler)
 	http.HandleFunc("/", indexHandler)
@@ -56,132 +47,6 @@ func start(w http.ResponseWriter, r *http.Request) {
 	log.Infof(c, "STARTING")
 }
 
-// スプレッドシート上の全銘柄について本日分のデータがDBに書き込まれているか確認
-func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
-	// GAE log
-	ctx := appengine.NewContext(r)
-
-	// 環境変数を最初に読み込み
-	getEnv(r)
-
-	log.Infof(ctx, "ensure daily data")
-
-	// spreadsheetのclientを取得
-	sheetService, err := getSheetClient(r)
-	if err != nil {
-		log.Errorf(ctx, "err: %v", err)
-		os.Exit(0)
-	}
-
-	jst, _ := time.LoadLocation("Asia/Tokyo")
-	now := time.Now().In(jst)
-	// 以下はデバッグ用
-	//now := time.Date(2019, 5, 18, 10, 11, 12, 0, time.Local)
-	// 休日データを取得
-	holidayMap := getHolidaysFromSheet(r, sheetService)
-	// 前の日が休みの日だったら取得すべきデータがないので起動しない
-	if !isPreviousBussinessday(r, now, holidayMap) {
-		log.Infof(ctx, "Previous day is not business day.")
-		return
-	}
-
-	// test環境ではデータの存在する最新の日付に合わせる
-	previousBussinessDay := "2018/09/18"
-	// prod環境の場合は、直近の取引日を取得する
-	// 一日前から順番に見ていって、直近の休日ではない日を取引日として設定する
-	if ENV != "test" {
-		// 直近の営業日を取得
-		previos, err := getPreviousBussinessDay(now, holidayMap)
-		if err != nil {
-			log.Errorf(ctx, "failed to getPreviousBussinessDay. %v", err)
-			os.Exit(0)
-		}
-		previousBussinessDay = previos
-	}
-	log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
-
-	// あとで全銘柄と比較するためにDBの直近の取引日のデータに含まれる銘柄を取得してmapに格納
-	codesInDb := func() map[int]bool {
-		// cloud sql(ローカルの場合はmysql)と接続
-		db, err := dialSql(r)
-		if err != nil {
-			log.Errorf(ctx, "Could not open db: %v", err)
-			os.Exit(0)
-		}
-		log.Infof(ctx, "Succeded to open db")
-
-		query := fmt.Sprintf("SELECT code FROM daily WHERE date = '%s'", previousBussinessDay)
-		dbRet := fetchSelectResult(r, db, query)
-		log.Infof(ctx, "fetched %d codes from 'daily' in db. target date: %s", len(dbRet), previousBussinessDay)
-
-		// あとで全銘柄と比較するためにmapに格納
-		dbCodesMap := map[int]bool{}
-		for _, v := range dbRet {
-			code, _ := strconv.Atoi(v.(string)) // int型に変換
-			dbCodesMap[code] = true
-		}
-		//log.Infof(ctx, "dbcodes %v", dbCodesMap)
-		return dbCodesMap
-	}
-	dbCodesMap := codesInDb()
-
-	// spreadsheetから銘柄コードを取得
-	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
-	if codes == nil || len(codes) == 0 {
-		log.Errorf(ctx, "failed to fetch sheetdata. err: '%v'.", codes)
-		os.Exit(0)
-	}
-	log.Infof(ctx, "fetched %d codes from 'ichibu' in sheet", len(codes))
-	//	// 全銘柄分がsheetにあるか確認する
-	//	var notExistInSheet []int
-	//	全銘柄分がdbにあるか確認する
-	var notExistInDb []int
-	for _, v := range codes {
-		code, _ := strconv.Atoi(v[0].(string))
-		if !dbCodesMap[code] {
-			// dbになければnotExistInDbにその銘柄を追加
-			notExistInDb = append(notExistInDb, code)
-		}
-	}
-
-	if len(notExistInDb) != 0 {
-		log.Errorf(ctx, "failed to write all codes data to db. unmatched!! not exist in db: %v", notExistInDb)
-		os.Exit(0)
-	}
-	log.Infof(ctx, "succeeded to write all %d codes data to db.", len(dbCodesMap))
-}
-
-// 与えられた日付の前日が取引日かどうかを判定する関数
-// 実行時の日付time.Now().In(jst)と休日のMapを渡す
-func isPreviousBussinessday(r *http.Request, t time.Time, holidayMap map[string]bool) bool {
-	ctx := appengine.NewContext(r)
-
-	log.Infof(ctx, "Is previous day Bussinessday? Received date: %v", t)
-	if ENV == "test" {
-		// test環境は常にtrue
-		log.Infof(ctx, "This is test env. no need to check.")
-		return true
-	}
-
-	// 以下はprodの場合
-
-	// 直近の営業日を取得
-	previousBussinessDay, err := getPreviousBussinessDay(t, holidayMap)
-	if err != nil {
-		log.Errorf(ctx, "failed to getPreviousBussinessDay. %v", err)
-		os.Exit(0)
-	}
-	log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
-
-	// 日付を１日ずらすためにtime.Time型に修正してから計算
-	previousTime, _ := time.Parse("2006/01/02", previousBussinessDay)
-	previousTimeNextDay := previousTime.AddDate(0, 0, 1)
-	if t.Format("2006/01/02") == previousTimeNextDay.Format("2006/01/02") {
-		log.Infof(ctx, "previous day is BussinessDay.")
-		return true
-	}
-	return false
-}
 func mustGetenv(r *http.Request, k string) string {
 	ctx := appengine.NewContext(r)
 	v := os.Getenv(k)
@@ -193,7 +58,7 @@ func mustGetenv(r *http.Request, k string) string {
 	return v
 }
 
-func indexHandlerDailySql(w http.ResponseWriter, r *http.Request) {
+func dailyHandler(w http.ResponseWriter, r *http.Request) {
 	// GAE log
 	ctx := appengine.NewContext(r)
 
@@ -261,7 +126,7 @@ func indexHandlerDailySql(w http.ResponseWriter, r *http.Request) {
 		}
 		// 指定された複数の銘柄単位でcodeをScrape
 		// scrapeに失敗してもエラーを出して続ける
-		prices, err := getEachCodesPricesNew(r, codes[begin:end])
+		prices, err := getEachCodesPrices(r, codes[begin:end])
 		if err != nil {
 			log.Warningf(ctx, "failed to scrape code. %v", err)
 		}
@@ -285,96 +150,8 @@ func indexHandlerDailySql(w http.ResponseWriter, r *http.Request) {
 	log.Infof(ctx, "succeeded to write all records. target: %d, inserted: %d", target, inserted)
 }
 
-//func indexHandlerDaily(w http.ResponseWriter, r *http.Request) {
-//	// GAE log
-//	ctx := appengine.NewContext(r)
-//
-//	// read environment values
-//	getEnv(r)
-//
-//	// 100件ずつ(test環境は10件)スクレイピングしてSheetに書き込み
-//	// 最初に環境変数を読み込む
-//	MAX_SHEET_INSERT, err := strconv.Atoi(mustGetenv(r, "MAX_SHEET_INSERT"))
-//	if err != nil {
-//		log.Errorf(ctx, "failed to get MAX_SHEET_INSERT. err: %v", err)
-//		os.Exit(0)
-//	}
-//
-//	// spreadsheetのclientを取得
-//	sheetService, err := getSheetClient(r)
-//	if err != nil {
-//		log.Errorf(ctx, "err: %v", err)
-//		os.Exit(0)
-//	}
-//
-//	if !isBussinessday(sheetService, r) {
-//		log.Infof(ctx, "Is not a business day today.")
-//		return
-//	}
-//
-//	// spreadsheetから銘柄コードを取得
-//	//codes := readCode(sheetService, r, "ichibu")
-//	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
-//	if codes == nil || len(codes) == 0 {
-//		log.Infof(ctx, "No target data.")
-//		os.Exit(0)
-//	}
-//
-//	// 重複書き込みをしないように既存のデータに目印をつける
-//	resp := getSheetData(r, sheetService, DAILYPRICE_SHEETID, "daily")
-//	if resp == nil {
-//		log.Errorf(ctx, "failed to fetch sheetdata: '%v'", resp)
-//		os.Exit(0)
-//	}
-//	existData := map[string]bool{}
-//	for _, v := range resp {
-//		// codeと日付の組をmapに登録
-//		cd := fmt.Sprintf("%s %s", v[0], v[1])
-//		existData[cd] = true
-//	}
-//
-//	// 書き込み対象の件数
-//	target := 0
-//	// 書き込めた件数
-//	inserted := 0
-//
-//	length := len(codes)
-//	for begin := 0; begin < length; begin += MAX_SHEET_INSERT {
-//		end := begin + MAX_SHEET_INSERT
-//		if end >= length {
-//			end = length
-//		}
-//		partial := codes[begin:end]
-//		tar, ins := scrapeAndWrite(r, partial, sheetService, existData)
-//		target += tar
-//		inserted += ins
-//	}
-//
-//	log.Infof(ctx, "wrote records done. target: %d, inserted: %d", target, inserted)
-//	if target != inserted {
-//		log.Errorf(ctx, "failed to write all records. target: %d, inserted: %d", target, inserted)
-//		os.Exit(0)
-//	}
-//	log.Infof(ctx, "succeded to write all records.")
-//}
-
-//func scrapeAndWrite(r *http.Request, codes [][]interface{}, s *sheets.Service, existData map[string]bool) (int, int) {
-//	// MAX単位でcodeをScrapeしてSpreadSheetに書き込み
-//	prices := getEachCodesPrices(r, codes)
-//	// シートに存在しないものだけを抽出
-//	uniqPrices := getUniqPrice(r, prices, existData)
-//
-//	target := 0
-//	inserted := 0
-//	// すでにシートに存在するデータは書き込まない
-//	if uniqPrices != nil {
-//		target, inserted = writeStockpriceDaily(r, s, uniqPrices)
-//	}
-//	return target, inserted
-//}
-
 // 複数銘柄についてそれぞれの株価を取得する
-func getEachCodesPricesNew(r *http.Request, codes [][]interface{}) ([][]string, error) {
+func getEachCodesPrices(r *http.Request, codes [][]interface{}) ([][]string, error) {
 	ctx := appengine.NewContext(r)
 
 	var codePrices [][]string
@@ -393,13 +170,11 @@ func getEachCodesPricesNew(r *http.Request, codes [][]interface{}) ([][]string, 
 			allErrors += fmt.Sprintf("[code: %s %v]\n", code, err)
 			continue
 		}
-		//log.Debugf(ctx, "getEachCodesPrices prices: %v", p)
 
 		// ["日付", "始値"...],["日付", "始値"...],...を１行ずつ展開
 		for _, oneDayPrices := range oneMonthPrices {
 			// ["日付", "始値"...]の配列の先頭に銘柄codeを追加
 			oneDayCodePrices := append([]string{code}, oneDayPrices...)
-			//log.Debugf(ctx, "getEachCodesPrices each price: %v", codePrice)
 			codePrices = append(codePrices, oneDayCodePrices)
 		}
 		time.Sleep(1 * time.Second) // 1秒待つ
@@ -410,39 +185,6 @@ func getEachCodesPricesNew(r *http.Request, codes [][]interface{}) ([][]string, 
 	}
 	return codePrices, nil
 }
-
-//// TODO: あとでこれは消してgetEachCodesPricesNewと置き換える
-//// 複数銘柄についてそれぞれの株価を取得する
-//func getEachCodesPrices(r *http.Request, codes [][]interface{}) []codePrice {
-//	ctx := appengine.NewContext(r)
-//
-//	var prices []codePrice
-//
-//	var allErrors string
-//	for _, v := range codes {
-//		code := v[0].(string) // row's type: []interface {}. ex. [8411]
-//
-//		// codeごとに株価を取得
-//		// pは一ヶ月分の株価
-//		p, err := doScrapeDaily(r, code)
-//		if err != nil {
-//			//log.Infof(ctx, "err: %v", err)
-//			allErrors += fmt.Sprintf("%v ", err)
-//			continue
-//		}
-//		log.Infof(ctx, "getEachCodesPrices prices: %v", p)
-//		// code, 株価の単位でpricesに格納
-//		for _, dp := range p {
-//			prices = append(prices, codePrice{code, dp})
-//		}
-//		time.Sleep(1 * time.Second) // 1秒待つ
-//	}
-//	if allErrors != "" {
-//		// 複数の銘柄で起きたエラーをまとめて出力
-//		log.Warningf(ctx, "failed to scrape. code: [%s]\n", allErrors)
-//	}
-//	return prices
-//}
 
 func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 	// GAE log
@@ -950,71 +692,6 @@ func getFormatedPrice(s string) (string, error) {
 	return price, nil
 }
 
-//func getUniqPrice(r *http.Request, prices []codePrice, existData map[string]bool) []codePrice {
-//	ctx := appengine.NewContext(r)
-//
-//	var uniqPrices []codePrice
-//	for _, p := range prices {
-//		// codeと日付の組をmapに登録済みのデータと照合
-//		cd := fmt.Sprintf("%s %s", p.Code, p.Price[0])
-//		if !existData[cd] {
-//			uniqPrices = append(uniqPrices, codePrice{p.Code, p.Price})
-//			log.Debugf(ctx, "insert target code and price %s %v", p.Code, p.Price)
-//		} else {
-//			log.Debugf(ctx, "duplicated code and price %s %v", p.Code, p.Price)
-//		}
-//	}
-//	return uniqPrices
-//}
-
-//func writeStockpriceDaily(r *http.Request, srv *sheets.Service, prices []codePrice) (int, int) {
-//	ctx := appengine.NewContext(r)
-//
-//	// spreadsheetに書き込む対象の行列を作成
-//	var matrix = make([][]interface{}, 0)
-//	for _, p := range prices {
-//		var ele = make([]interface{}, 0)
-//		ele = append(ele, p.Code)
-//		for _, v := range p.Price {
-//			ele = append(ele, v)
-//		}
-//		// ele ex. [8306 8/23 320 322 317 319 8068000 319.0]
-//		matrix = append(matrix, ele)
-//	}
-//	valueRange := &sheets.ValueRange{
-//		MajorDimension: "ROWS",
-//		//matrix : [][]interface{} 型
-//		// [銘柄, 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値] * 日付
-//		Values: matrix,
-//	}
-//
-//	// spreadsheetに書き込むレコードの件数
-//	target_num := len(matrix)
-//	log.Infof(ctx, "insert target num: %v", target_num)
-//
-//	var MaxRetries = 5
-//	for attempt := 0; attempt < MaxRetries; attempt++ {
-//		resp, err := srv.Spreadsheets.Values.Append(DAILYPRICE_SHEETID, "daily", valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
-//		if err != nil {
-//			log.Warningf(ctx, "failed to write spreadsheet. error: %v. attempt: %d", err, attempt+1)
-//			time.Sleep(3 * time.Second) // 3秒待つ
-//			continue
-//		}
-//		status := resp.ServerResponse.HTTPStatusCode
-//		if status != 200 {
-//			log.Warningf(ctx, "HTTPstatus error. %v. attempt: %d", status, attempt+1)
-//			time.Sleep(3 * time.Second) // 3秒待つ
-//			continue
-//		}
-//		// 書き込み対象の件数と成功した件数
-//		log.Debugf(ctx, "succeded to write data to sheet.")
-//		return target_num, target_num
-//	}
-//	// 書き込み対象の件数と成功した件数(=0)
-//	log.Errorf(ctx, "failed to write data to sheet. reached to MaxRetries: %d", MaxRetries)
-//	return target_num, 0
-//}
-
 func writeStockprice(srv *sheets.Service, r *http.Request, code string, date string, stockprice string) {
 	ctx := appengine.NewContext(r)
 
@@ -1090,4 +767,131 @@ func calcIncreaseRate(resp [][]interface{}, code string, num int, r *http.Reques
 	}
 	// rate ex. [1.0007303534910896 1.002781030444965 1.0013154048523822 0.997379531227253 1.0011690778898146 1.0011690778898146]
 	return rate, nil
+}
+
+// スプレッドシート上の全銘柄について本日分のデータがDBに書き込まれているか確認
+func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	// 環境変数を最初に読み込み
+	getEnv(r)
+
+	log.Infof(ctx, "ensure daily data")
+
+	// spreadsheetのclientを取得
+	sheetService, err := getSheetClient(r)
+	if err != nil {
+		log.Errorf(ctx, "err: %v", err)
+		os.Exit(0)
+	}
+
+	jst, _ := time.LoadLocation("Asia/Tokyo")
+	now := time.Now().In(jst)
+	// 以下はデバッグ用
+	//now := time.Date(2019, 5, 18, 10, 11, 12, 0, time.Local)
+	// 休日データを取得
+	holidayMap := getHolidaysFromSheet(r, sheetService)
+	// 前の日が休みの日だったら取得すべきデータがないので起動しない
+	if !isPreviousBussinessday(r, now, holidayMap) {
+		log.Infof(ctx, "Previous day is not business day.")
+		return
+	}
+
+	// test環境ではデータの存在する最新の日付に合わせる
+	previousBussinessDay := "2018/09/18"
+	// prod環境の場合は、直近の取引日を取得する
+	// 一日前から順番に見ていって、直近の休日ではない日を取引日として設定する
+	if ENV != "test" {
+		// 直近の営業日を取得
+		previos, err := getPreviousBussinessDay(now, holidayMap)
+		if err != nil {
+			log.Errorf(ctx, "failed to getPreviousBussinessDay. %v", err)
+			os.Exit(0)
+		}
+		previousBussinessDay = previos
+	}
+	log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
+
+	// あとで全銘柄と比較するためにDBの直近の取引日のデータに含まれる銘柄を取得してmapに格納
+	codesInDb := func() map[int]bool {
+		// cloud sql(ローカルの場合はmysql)と接続
+		db, err := dialSql(r)
+		if err != nil {
+			log.Errorf(ctx, "Could not open db: %v", err)
+			os.Exit(0)
+		}
+		log.Infof(ctx, "Succeded to open db")
+
+		query := fmt.Sprintf("SELECT code FROM daily WHERE date = '%s'", previousBussinessDay)
+		dbRet := fetchSelectResult(r, db, query)
+		log.Infof(ctx, "fetched %d codes from 'daily' in db. target date: %s", len(dbRet), previousBussinessDay)
+
+		// あとで全銘柄と比較するためにmapに格納
+		dbCodesMap := map[int]bool{}
+		for _, v := range dbRet {
+			code, _ := strconv.Atoi(v.(string)) // int型に変換
+			dbCodesMap[code] = true
+		}
+		//log.Infof(ctx, "dbcodes %v", dbCodesMap)
+		return dbCodesMap
+	}
+	dbCodesMap := codesInDb()
+
+	// spreadsheetから銘柄コードを取得
+	codes := getSheetData(r, sheetService, CODE_SHEETID, "ichibu")
+	if codes == nil || len(codes) == 0 {
+		log.Errorf(ctx, "failed to fetch sheetdata. err: '%v'.", codes)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "fetched %d codes from 'ichibu' in sheet", len(codes))
+	//	// 全銘柄分がsheetにあるか確認する
+	//	var notExistInSheet []int
+	//	全銘柄分がdbにあるか確認する
+	var notExistInDb []int
+	for _, v := range codes {
+		code, _ := strconv.Atoi(v[0].(string))
+		if !dbCodesMap[code] {
+			// dbになければnotExistInDbにその銘柄を追加
+			notExistInDb = append(notExistInDb, code)
+		}
+	}
+
+	if len(notExistInDb) != 0 {
+		log.Errorf(ctx, "failed to write all codes data to db. unmatched!! not exist in db: %v", notExistInDb)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "succeeded to write all %d codes data to db.", len(dbCodesMap))
+}
+
+// 与えられた日付の前日が取引日かどうかを判定する関数
+// 実行時の日付time.Now().In(jst)と休日のMapを渡す
+func isPreviousBussinessday(r *http.Request, t time.Time, holidayMap map[string]bool) bool {
+	ctx := appengine.NewContext(r)
+
+	log.Infof(ctx, "Is previous day Bussinessday? Received date: %v", t)
+	if ENV == "test" {
+		// test環境は常にtrue
+		log.Infof(ctx, "This is test env. no need to check.")
+		return true
+	}
+
+	// 以下はprodの場合
+
+	// 直近の営業日を取得
+	previousBussinessDay, err := getPreviousBussinessDay(t, holidayMap)
+	if err != nil {
+		log.Errorf(ctx, "failed to getPreviousBussinessDay. %v", err)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
+
+	// 日付を１日ずらすためにtime.Time型に修正してから計算
+	previousTime, _ := time.Parse("2006/01/02", previousBussinessDay)
+	previousTimeNextDay := previousTime.AddDate(0, 0, 1)
+	if t.Format("2006/01/02") == previousTimeNextDay.Format("2006/01/02") {
+		log.Infof(ctx, "previous day is BussinessDay.")
+		return true
+	}
+	return false
 }
