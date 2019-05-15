@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
 	//"sync"
 	"time"
 
@@ -577,7 +578,7 @@ func doScrape(r *http.Request, code string) (string, string, error) {
 		price = s.Find(".item1").Text()
 	})
 	// 必要な形に整形して返す
-	d, err := getFormatedDate(time, r)
+	d, err := getFormatedDate(time)
 	if err != nil {
 		return "", "", err // 変換できない時は戻る
 	}
@@ -622,7 +623,7 @@ func fetchWebpageDoc(r *http.Request, urlname string, code string) (*goquery.Doc
 	return doc, nil
 }
 
-func getFormatedDate(s string, r *http.Request) (string, error) {
+func getFormatedDate(s string) (string, error) {
 	hour, min, err := getHourMin(s) // スクレイピングの結果から時刻を取得
 	if err != nil {
 		return "", err // 変換できない時は戻る
