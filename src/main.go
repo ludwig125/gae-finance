@@ -287,9 +287,9 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 	// }
 
 	for _, code := range codes {
-		// 直近 100日分最近から順にソートして取得
-
-		dcs, err := getOrderedDateCloses(r, db, code.(string), previousBussinessDay, 100)
+		// 直近 200日分最近から順にソートして取得
+		// TODO: あとで100に直す
+		dcs, err := getOrderedDateCloses(r, db, code.(string), previousBussinessDay, 200)
 		if err != nil {
 			log.Errorf(ctx, "failed to getOrderedDateCloses. code: %s, err: %v", code, err)
 			os.Exit(0) // TODO: あとで消す
