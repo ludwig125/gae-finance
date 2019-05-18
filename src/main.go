@@ -486,7 +486,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 // 取得する件数 limit: 指定しない場合は0
 // 検索する日付 latestDate: 指定しない場合は空. 指定した場合はその日付を最新のものとして検索
 func getOrderedDateCloses(r *http.Request, db *sql.DB, code string, latestDate string, limit int) ([]dateClose, error) {
-	// TODO: ログ出さないならrは不要
+	// TODO: ログ出さないならパラメータのrは不要
 	//ctx := appengine.NewContext(r)
 	limitStr := ""
 	if limit != 0 {
