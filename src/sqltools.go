@@ -37,9 +37,8 @@ func dialSQL(r *http.Request) (*sql.DB, error) {
 	return sql.Open("mysql", fmt.Sprintf("%s:%s@cloudsql(%s)/stockprice", user, password, connectionName))
 }
 
-// TODO: insertDataの引数が[][]stringのもの。どちらかに統一する
 // insert対象のtable名、項目名、レコードを引数に取ってDBに書き込む
-func insertDataStrings(r *http.Request, db *sql.DB, table string, columns []string, records [][]string) (int, error) {
+func insertDB(r *http.Request, db *sql.DB, table string, columns []string, records [][]string) (int, error) {
 	ctx := appengine.NewContext(r)
 
 	// insert対象を組み立てる
@@ -82,12 +81,14 @@ func insertDataStrings(r *http.Request, db *sql.DB, table string, columns []stri
 	return targetNum, nil
 }
 
+// TODO: error 返すようにする
+// TODO: 上のinsertDBと共通化したい
 func insertMovingAvg(r *http.Request, db *sql.DB, table string, code string, dateList []string, mvavg map[int]map[string]float64) {
 	ctx := appengine.NewContext(r)
 
 	// insert対象を組み立てる
 	// TODO: +=の文字列結合は遅いので改良する
-	// TODO: 上のinsertDataと共通化したい
+
 	ins := ""
 	for _, date := range dateList {
 		//		log.Infof(ctx, "code %s, date %s, 5: %v, 20: %v, 60: %v, 100 %v", date, mvavg[5][date], mvavg[20][date], mvavg[60][date], mvavg[100][date])
@@ -133,6 +134,7 @@ func showDatabases(w http.ResponseWriter, db *sql.DB) {
 	w.Write(buf.Bytes())
 }
 
+// TODO: error 返すようにする
 func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
 	ctx := appengine.NewContext(r)
 
