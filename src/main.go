@@ -29,9 +29,34 @@ type codeRate struct {
 
 // 日付と終値
 type dateClose struct {
-	Date string
-	//Close int64
+	Date  string
 	Close float64
+}
+type codeDiffRate struct {
+	Code             string
+	DiffCloseMoving5 float64 // 直近の終値と５日移動平均の差
+	IncreasingRate   float64 // 直近の終値のその一つ前の終値との増加率
+}
+
+// codeDiffRateの要素を全てinterfaceにするメソッド
+func (cdr *codeDiffRate) toInterface() []interface{} {
+	var cdrIF []interface{}
+	cdrIF = append(cdrIF, cdr.Code)
+	cdrIF = append(cdrIF, cdr.DiffCloseMoving5)
+	cdrIF = append(cdrIF, cdr.IncreasingRate)
+	return cdrIF
+}
+
+type codeDiffRates []codeDiffRate
+
+// codeDiffRatesを[][]interfaceにするメソッド
+// SpreadSheetへの書き込みのためにinterface型にする必要がある
+func (cdrs *codeDiffRates) toInterface() [][]interface{} {
+	var cdrsIF [][]interface{}
+	for _, cdr := range *cdrs {
+		cdrsIF = append(cdrsIF, cdr.toInterface())
+	}
+	return cdrsIF
 }
 
 func main() {
@@ -259,47 +284,14 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 	codes := fetchSelectResult(r, db,
 		"SELECT code FROM daily WHERE date = (SELECT date FROM daily ORDER BY date DESC LIMIT 1);")
 
-	// //　TODO: getOrderedDateClosesとあとで置き換える
-	// // codeと件数(指定しない場合は0)を与えると、日付と終値の構造体を直近の日付順にして配列で返す関数
-	// orderedDateClose := func(code string, limit int) ([]dateClose, error) {
-	// 	limitStr := ""
-	// 	if limit != 0 {
-	// 		limitStr = fmt.Sprintf("LIMIT %d", limit)
-	// 	}
-
-	// 	dbRet := fetchSelectResult(r, db, fmt.Sprintf(
-	// 		"SELECT date, close FROM daily WHERE code = %s ORDER BY date DESC %s;", code, limitStr))
-
-	// 	var dateCloses []dateClose
-	// 	// 日付と終値の２つを取得
-	// 	for i := 0; i < len(dbRet); i += 2 {
-	// 		// int32型数値に変換
-	// 		//c, _ := strconv.Atoi(dbRet[i+1].(string))
-	// 		log.Infof(ctx, "dbRet[i+1] %v", dbRet[i+1])
-	// 		c, err := strconv.ParseInt(dbRet[i+1].(string), 10, 64)
-	// 		if err != nil {
-	// 			return nil, err
-	// 		}
-	// 		dateCloses = append(dateCloses, dateClose{Date: dbRet[i].(string), Close: c})
-	// 		//log.Infof(ctx, "%s %s", dbRet[i], dbRet[i+1])
-	// 	}
-	// 	return dateCloses, nil
-	// }
-
 	for _, code := range codes {
-		// 直近 200日分最近から順にソートして取得
+		// 直近 100日分最近から順にソートして取得
 		// TODO: あとで100に直す
-		dcs, err := getOrderedDateCloses(r, db, code.(string), previousBussinessDay, 200)
+		dcs, err := getOrderedDateCloses(r, db, code.(string), previousBussinessDay, 100)
 		if err != nil {
 			log.Errorf(ctx, "failed to getOrderedDateCloses. code: %s, err: %v", code, err)
-			os.Exit(0) // TODO: あとで消す
+			os.Exit(0) // TODO: あとで消すか検討
 		}
-
-		// dcs, err := orderedDateClose(code.(string), 100)
-		// if err != nil {
-		// 	log.Errorf(ctx, "failed to orderedDateClose. %v", err)
-		// 	os.Exit(0) // TODO: あとで消す
-		// }
 
 		// DBから取得できた日付のリスト
 		var dateList []string
@@ -450,35 +442,50 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 最新の日付にある銘柄を取得
-	// codes := fetchSelectResult(r, db,
-	// 	"SELECT code FROM daily WHERE date = (SELECT date FROM daily ORDER BY date DESC LIMIT 1);")
+	codes := fetchSelectResult(r, db,
+		"SELECT code FROM daily WHERE date = (SELECT date FROM daily ORDER BY date DESC LIMIT 1);")
 
-	codes := []interface{}{}
-	//codesStr := []string{"8200", "8203", "8207"}
-	codesStr := []string{"6758", "7201", "8058", "9432"}
-	for _, v := range codesStr {
-		codes = append(codes, v)
-	}
+	// debug用
+	// codes := []interface{}{}
+	// codesStr := []string{"6758", "7201", "8058", "9432"}
+	// for _, v := range codesStr {
+	// 	codes = append(codes, v)
+	// }
 	log.Infof(ctx, "%v", codes)
 
-	type codeDiffRate struct {
-		Code             string
-		DiffCloseMoving5 float64 // 直近の終値と５日移動平均の差
-		IncreasingRate   float64 // 直近の終値のその一つ前の終値との増加率
-	}
-	cdr := []codeDiffRate{}
+	cdrs := codeDiffRates{}
 	for _, code := range codes {
-		//code = "8200"
 		diff, rate, err := calcDiffCloseMoving5IncreasingRate(code.(string))
 		if err != nil {
 			log.Errorf(ctx, "failed to calcDiffCloseMoving5IncreasingRate. code: %s, err: %v", code, err)
 			os.Exit(0)
 		}
 		//log.Infof(ctx, "%f %f", diff, rate)
-		cdr = append(cdr, codeDiffRate{Code: code.(string), DiffCloseMoving5: diff, IncreasingRate: rate})
+		cdrs = append(cdrs, codeDiffRate{Code: code.(string), DiffCloseMoving5: diff, IncreasingRate: rate})
 	}
-	log.Infof(ctx, "%v", cdr)
 
+	// 「終値-５日移動平均」の差が大きい順に並び替え
+	sort.SliceStable(cdrs, func(i, j int) bool {
+		return cdrs[i].DiffCloseMoving5 > cdrs[j].DiffCloseMoving5
+	})
+
+	// 事前にSheetをclear
+	sheetName := "kahanshin"
+	if err := clearSheet(sheet, calcSheetID, sheetName); err != nil {
+		log.Errorf(ctx, "failed to clearSheet. sheetID: %s, sheetName: %s", calcSheetID, sheetName)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "succeeded to clearSheet. sheetID: %s, sheetName: %s", calcSheetID, sheetName)
+
+	// Sheetへ書き込み
+	// [][]interface{}型に直してwriteSheetに渡す
+	cdrsIF := cdrs.toInterface()
+	if err := writeSheet(sheet, calcSheetID, sheetName, cdrsIF); err != nil {
+		log.Errorf(ctx, "failed to writeSheet. sheetID: %s, sheetName: %s", calcSheetID, sheetName)
+		log.Infof(ctx, "error data: %v", cdrsIF)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "succeeded to writeSheet. sheetID: %s, sheetName: %s", calcSheetID, sheetName)
 }
 
 // codeと取得する件数と検索する日付を与えると、
@@ -617,7 +624,11 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, wholeCodeRate)
 
 	// 事前にrateのシートをclear
-	clearSheet(sheetService, r, rateSheetID, "rate")
+	sheetName := "rate"
+	if err := clearSheet(sheetService, rateSheetID, sheetName); err != nil {
+		log.Errorf(ctx, "failed to clearSheet. sheetID: %s, sheetName: %s", rateSheetID, sheetName)
+		os.Exit(0)
+	}
 
 	// 株価の比率順にソートしたものを書き込み
 	writeRate(sheetService, r, wholeCodeRate, rateSheetID, "rate")
@@ -630,6 +641,7 @@ var (
 	stockPriceSheetID string
 	dailyRateSheetID  string
 	rateSheetID       string
+	calcSheetID       string
 )
 
 func getEnv(r *http.Request) {
@@ -647,7 +659,7 @@ func getEnv(r *http.Request) {
 	stockPriceSheetID = mustGetenv(r, "STOCKPRICE_SHEETID")
 	dailyRateSheetID = mustGetenv(r, "DAILYRATE_SHEETID")
 	rateSheetID = mustGetenv(r, "RATE_SHEETID")
-
+	calcSheetID = mustGetenv(r, "CALC_SHEETID")
 }
 
 // spreadsheetの'holiday' sheetを読み取って、{"2019/01/01", true}のような祝日のMapを作成して返す
