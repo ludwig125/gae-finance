@@ -191,9 +191,9 @@ func dailyHandler(w http.ResponseWriter, r *http.Request) {
 		target += len(prices)
 
 		// dailypriceをcloudsqlに挿入
-		ins, err := insertDataStrings(r, db, "daily", dailyColumns, prices)
+		ins, err := insertDB(r, db, "daily", dailyColumns, prices)
 		if err != nil {
-			log.Errorf(ctx, "failed to insert. %v", err)
+			log.Errorf(ctx, "failed to insertDB. %v", err)
 			continue
 		}
 		inserted += ins
