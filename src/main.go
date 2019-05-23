@@ -93,6 +93,7 @@ func main() {
 	http.HandleFunc("/ensure_daily", ensureDailyDBHandler)
 	http.HandleFunc("/calc", calcHandler)
 	http.HandleFunc("/", indexHandler)
+	http.HandleFunc("/connect_db", connectDBHandler)
 	appengine.Main() // Starts the server to receive requests
 }
 
@@ -139,6 +140,25 @@ func mustGetenv(r *http.Request, k string) string {
 	}
 	log.Infof(ctx, "%s environment variable set.", k)
 	return v
+}
+
+// ブラウザでDBに接続できるか確認するためのHandler
+func connectDBHandler(w http.ResponseWriter, r *http.Request) {
+	// read environment values
+	getEnv(r)
+
+	// cloud sql(ローカルの場合はmysql)と接続
+	db, err := dialSQL(r)
+	if err != nil {
+		fmt.Fprintf(w, "Could not open db: %v\n", err)
+		return
+	}
+	fmt.Fprintln(w, "Succeeded to open db")
+
+	showDatabases(w, db)
+
+	countDaily := fetchSelectResult(r, db, "SELECT COUNT(*) FROM daily;")
+	fmt.Fprintf(w, "Total 'daily' records: %v\n", countDaily)
 }
 
 func dailyHandler(w http.ResponseWriter, r *http.Request) {
