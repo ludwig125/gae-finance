@@ -24,7 +24,8 @@ env_variables:
   MAX_SHEET_INSERT: 100
 
   # cloud sql
-  CLOUDSQL_CONNECTION_NAME: "myfinance-01:asia-northeast1:myfinance"
+  #CLOUDSQL_CONNECTION_NAME: "myfinance-01:asia-northeast1:myfinance"
+  CLOUDSQL_CONNECTION_NAME: "myfinance-01:us-central1:myfinance-us-central1"
   CLOUDSQL_USER: root
   MAX_SQL_INSERT: 100
 includes:
