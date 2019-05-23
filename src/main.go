@@ -68,12 +68,15 @@ func connectDBHandler(w http.ResponseWriter, r *http.Request) {
 	// cloud sql(ローカルの場合はmysql)と接続
 	db, err := dialSQL(r)
 	if err != nil {
-		fmt.Fprintf(w, "Could not open db: %v", err)
+		fmt.Fprintf(w, "Could not open db: %v\n", err)
 		return
 	}
 	fmt.Fprintln(w, "Succeeded to open db")
 
 	showDatabases(w, db)
+
+	countDaily := fetchSelectResult(r, db, "SELECT COUNT(*) FROM daily;")
+	fmt.Fprintf(w, "Total 'daily' records: %v\n", countDaily)
 }
 
 func dailyHandler(w http.ResponseWriter, r *http.Request) {
