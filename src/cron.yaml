@@ -21,11 +21,11 @@ cron:
   url: /ensure_daily
   schedule: every day 02:45
   timezone: Asia/Tokyo
-#- description: "calculate moving average 5, 20, 60, 100"
-#  url: /movingavg
-#  schedule: every day 03:00
-#  timezone: Asia/Tokyo
-#- description: "calculate kahanshin"
-#  url: /calc
-#  schedule: every day 04:00
-#  timezone: Asia/Tokyo
+- description: "calculate moving average 5, 20, 60, 100"
+  url: /movingavg
+  schedule: every day 03:00
+  timezone: Asia/Tokyo
+- description: "calculate kahanshin"
+  url: /calc
+  schedule: every day 04:00
+  timezone: Asia/Tokyo
