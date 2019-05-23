@@ -4,10 +4,10 @@ cron:
 #  schedule: every 60 minutes from 09:25 to 15:25
 #  timezone: Asia/Tokyo
 
-#- description: "stockprice daily"
-#  url: /daily
-#  schedule: every day 01:00
-#  timezone: Asia/Tokyo
+- description: "stockprice daily"
+  url: /daily
+  schedule: every day 01:00
+  timezone: Asia/Tokyo
 
 #- description: "calculate stockprice daily rate"
 #  url: /calc_daily
@@ -17,10 +17,10 @@ cron:
 #  url: /daily_to_sql
 #  schedule: every day 02:30
 #  timezone: Asia/Tokyo
-#- description: "ensure daily data in DB"
-#  url: /ensure_daily
-#  schedule: every day 02:45
-#  timezone: Asia/Tokyo
+- description: "ensure daily data in DB"
+  url: /ensure_daily
+  schedule: every day 02:45
+  timezone: Asia/Tokyo
 #- description: "calculate moving average 5, 20, 60, 100"
 #  url: /movingavg
 #  schedule: every day 03:00
