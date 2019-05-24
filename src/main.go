@@ -87,6 +87,7 @@ func (khsrs *kahanshinRates) toInterface() [][]interface{} {
 }
 
 func main() {
+	// TODO: Handerごとに開始と終了のログを出して、実行時間も表示する
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", dailyHandler)
 	http.HandleFunc("/movingavg", movingAvgHandler)
@@ -333,7 +334,6 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 
 	for _, code := range codes {
 		// 直近 100日分最近から順にソートして取得
-		// TODO: あとで100に直す
 		dcs, err := getOrderedDateCloses(r, db, code.(string), previousBussinessDay, 100)
 		if err != nil {
 			log.Errorf(ctx, "failed to getOrderedDateCloses. code: %s, err: %v", code, err)
