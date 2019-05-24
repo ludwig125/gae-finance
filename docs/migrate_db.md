@@ -54,7 +54,9 @@ SKU単位で見てみると使用しているサービスの内訳がわかる
   - クレジット適用前の費用：¥6,996
 
 ・・・なにこの値段
-#### SKUって？[単品管理 - Wikipedia](https://ja.wikipedia.org/wiki/%E5%8D%98%E5%93%81%E7%AE%A1%E7%90%86)
+#### SKUって？
+
+[単品管理 - Wikipedia](https://ja.wikipedia.org/wiki/%E5%8D%98%E5%93%81%E7%AE%A1%E7%90%86)
 
 > SKUは最小管理単位 (Stock Keeping Unit) の略。
 
@@ -108,9 +110,11 @@ DB standard Intel N1 1 VCPU running in Japan (with 30% promotional discount)
 #### mysql 2ndの料金
 
 東京（asia-northeast1）を見ると、
+
 | マシンタイプ | 仮想 CPU 数      | RAM（GB） | 最大ストレージ容量 | 最大接続数 | 料金（米ドル） | 継続利用価格（米ドル） |
 |------------------|-----------|--------------------|------------|----------------|------------------------|-------|
 | db-n1-standard-1 | 1         | 3.75               | 10,230 GB  | 4,000          | $0.13                  | $0.09 |
+
 となっていた。
 
 
