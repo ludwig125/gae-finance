@@ -76,7 +76,10 @@ Google Cloud PlatformにはSKUの意味について説明がなかったので�
 上で表示したレポートのSKUの一覧を見ると、
 DB standard Intel N1 1 VCPU running in Japan (with 30% promotional discount)
 に一番金がかかっているらしい
+
 - ¥6,996
+
+
 ![image](https://user-images.githubusercontent.com/18366858/58231379-d338c400-7d71-11e9-921f-7f5579408836.png)
 
 この「DB standard Intel N1 1 VCPU running in Japan (with 30% promotional discount)」を上の公式の表「GCP SKU一覧」から探すとあった
