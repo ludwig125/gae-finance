@@ -111,7 +111,7 @@ DB standard Intel N1 1 VCPU running in Japan (with 30% promotional discount)
 
 東京（asia-northeast1）を見ると、
 
-| マシンタイプ | 仮想 CPU 数      | RAM（GB） | 最大ストレージ容量 | 最大接続数 | 料金（米ドル） | 継続利用価格（米ドル） |
+| マシンタイプ      | 仮想 CPU 数 | RAM（GB） | 最大ストレージ容量 | 最大接続数 | 料金（米ドル） | 継続利用価格（米ドル） |
 |------------------|-----------|--------------------|------------|----------------|------------------------|-------|
 | db-n1-standard-1 | 1         | 3.75               | 10,230 GB  | 4,000          | $0.13                  | $0.09 |
 
@@ -238,7 +238,8 @@ https://console.cloud.google.com/sql/instances
 から、アイオワリージョンのdb-f1-microを新しく作る
 
 ![image](https://user-images.githubusercontent.com/18366858/58294783-dd58d200-7e06-11e9-884f-bc492cbec34b.png)
-「インスタンスを作成」
+
+で「インスタンスを作成」
 
 ![image](https://user-images.githubusercontent.com/18366858/58294803-f497bf80-7e06-11e9-917b-dda1b8862dbb.png)
 
