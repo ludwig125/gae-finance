@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
@@ -29,16 +30,70 @@ type codeRate struct {
 // 日付と終値
 type dateClose struct {
 	Date  string
-	Close int64
+	Close float64
+}
+
+// type codeDiffRate struct {
+// 	Code             string
+// 	DiffCloseMoving5 float64 // 直近の終値と５日移動平均の差
+// 	IncreasingRate   float64 // 直近の終値のその一つ前の終値との増加率
+// }
+
+// // codeDiffRateの要素を全てinterfaceにするメソッド
+// func (cdr *codeDiffRate) toInterface() []interface{} {
+// 	var cdrIF []interface{}
+// 	cdrIF = append(cdrIF, cdr.Code)
+// 	cdrIF = append(cdrIF, cdr.DiffCloseMoving5)
+// 	cdrIF = append(cdrIF, cdr.IncreasingRate)
+// 	return cdrIF
+// }
+
+// type codeDiffRates []codeDiffRate
+
+// // codeDiffRatesを[][]interfaceにするメソッド
+// // SpreadSheetへの書き込みのためにinterface型にする必要がある
+// func (cdrs *codeDiffRates) toInterface() [][]interface{} {
+// 	var cdrsIF [][]interface{}
+// 	for _, cdr := range *cdrs {
+// 		cdrsIF = append(cdrsIF, cdr.toInterface())
+// 	}
+// 	return cdrsIF
+// }
+
+// 前日の終値と前々日の終値が５日移動平均を横切る場合のその増加率
+type kahanshinRate struct {
+	Code           string
+	IncreasingRate float64 // 直近の終値のその一つ前の終値との増加率
+}
+
+// 要素を全てinterfaceにしたスライスを返すメソッド
+func (khsr *kahanshinRate) toInterface() []interface{} {
+	var khsrIF []interface{}
+	khsrIF = append(khsrIF, khsr.Code)
+	khsrIF = append(khsrIF, khsr.IncreasingRate)
+	return khsrIF
+}
+
+type kahanshinRates []kahanshinRate
+
+// [][]interfaceにするメソッド
+// SpreadSheetへの書き込みのためにinterface型にする必要がある
+func (khsrs *kahanshinRates) toInterface() [][]interface{} {
+	var khsrsIF [][]interface{}
+	for _, khsr := range *khsrs {
+		khsrsIF = append(khsrsIF, khsr.toInterface())
+	}
+	return khsrsIF
 }
 
 func main() {
+	// TODO: Handerごとに開始と終了のログを出して、実行時間も表示する
 	http.HandleFunc("/_ah/start", start)
 	http.HandleFunc("/daily", dailyHandler)
-	//http.HandleFunc("/calc_daily", indexHandlerCalcDailyOld)
 	http.HandleFunc("/movingavg", movingAvgHandler)
-	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/ensure_daily", ensureDailyDBHandler)
+	http.HandleFunc("/calc", calcHandler)
+	http.HandleFunc("/", indexHandler)
 	http.HandleFunc("/connect_db", connectDBHandler)
 	appengine.Main() // Starts the server to receive requests
 }
@@ -47,6 +102,34 @@ func main() {
 func start(w http.ResponseWriter, r *http.Request) {
 	c := appengine.NewContext(r)
 	log.Infof(c, "STARTING")
+}
+
+// TODO: 他のHandlerでもこれを最初に読み込むようにしたい
+// 環境変数の読み込み、SheetやDBのClientの取得をする
+func initialize(r *http.Request) (*sheets.Service, *sql.DB, error) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	// read environment values
+	getEnv(r)
+
+	// spreadsheetのclientを取得
+	sheetService, err := getSheetClient(r)
+	if err != nil {
+		log.Errorf(ctx, "failed to get sheet client. err: %v", err)
+		return nil, nil, err
+	}
+	log.Infof(ctx, "succeeded to get sheet client")
+
+	// cloud sql(ローカルの場合はmysql)と接続
+	db, err := dialSQL(r)
+	if err != nil {
+		log.Errorf(ctx, "failed to open db. err: %v", err)
+		return nil, nil, err
+	}
+	log.Infof(ctx, "succeeded to open db")
+
+	return sheetService, db, nil
 }
 
 func mustGetenv(r *http.Request, k string) string {
@@ -156,9 +239,9 @@ func dailyHandler(w http.ResponseWriter, r *http.Request) {
 		target += len(prices)
 
 		// dailypriceをcloudsqlに挿入
-		ins, err := insertDataStrings(r, db, "daily", dailyColumns, prices)
+		ins, err := insertDB(r, db, "daily", dailyColumns, prices)
 		if err != nil {
-			log.Errorf(ctx, "failed to insert. %v", err)
+			log.Errorf(ctx, "failed to insertDB. %v", err)
 			continue
 		}
 		inserted += ins
@@ -180,8 +263,8 @@ func getEachCodesPrices(r *http.Request, codes [][]interface{}) ([][]string, err
 	var allErrors string
 	for _, v := range codes {
 		code := v[0].(string) // row's type: []interface {}. ex. [8411]
-
 		log.Infof(ctx, "scraping code: %s", code)
+
 		// codeごとに株価を取得
 		// oneMonthPricesは,
 		// [日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値]の配列が１ヶ月分入った二重配列
@@ -211,68 +294,51 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 	// GAE log
 	ctx := appengine.NewContext(r)
 
-	// read environment values
-	getEnv(r)
-	// spreadsheetのclientを取得
-	sheetService, err := getSheetClient(r)
+	// get environment var, sheet, db
+	sheet, db, err := initialize(r)
 	if err != nil {
-		log.Errorf(ctx, "err: %v", err)
+		log.Errorf(ctx, "failed to initialize. err: %v", err)
 		os.Exit(0)
 	}
+	log.Infof(ctx, "succeeded to initialize. got environment var, sheet, db.")
+	//log.Infof(ctx, "%v %v", sheet, db)
+
 	jst, _ := time.LoadLocation("Asia/Tokyo")
 	now := time.Now().In(jst)
 	// 休日データを取得
-	holidayMap := getHolidaysFromSheet(r, sheetService)
+	holidayMap := getHolidaysFromSheet(r, sheet)
 	// 前の日が休みの日だったら取得すべきデータがないので起動しない
 	if !isPreviousBussinessday(r, now, holidayMap) {
 		log.Infof(ctx, "Previous day is not business day.")
 		return
 	}
 
-	// cloud sql(ローカルの場合はmysql)と接続
-	db, err := dialSQL(r)
-	if err != nil {
-		log.Errorf(ctx, "Could not open db: %v", err)
-		os.Exit(0)
+	// test環境ではデータの存在する最新の日付に合わせる
+	previousBussinessDay := "2019/05/16"
+	// prod環境の場合は、直近の取引日を取得する
+	// 一日前から順番に見ていって、直近の休日ではない日を取引日として設定する
+	if runEnv != "test" {
+		// 直近の営業日を取得
+		previos, err := getPreviousBussinessDay(now, holidayMap)
+		if err != nil {
+			log.Errorf(ctx, "failed to getPreviousBussinessDay. %v", err)
+			os.Exit(0)
+		}
+		previousBussinessDay = previos
 	}
-	log.Infof(ctx, "Succeeded to open db")
+	log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
 
 	// 最新の日付にある銘柄を取得
 	codes := fetchSelectResult(r, db,
 		"SELECT code FROM daily WHERE date = (SELECT date FROM daily ORDER BY date DESC LIMIT 1);")
 
-	// codeと件数(指定しない場合は0)を与えると、日付と終値の構造体を直近の日付順にして配列で返す関数
-	orderedDateClose := func(code string, limit int) []dateClose {
-		limitStr := ""
-		if limit != 0 {
-			limitStr = fmt.Sprintf("LIMIT %d", limit)
-		}
-
-		dbRet := fetchSelectResult(r, db, fmt.Sprintf(
-			"SELECT date, close FROM daily WHERE code = %s ORDER BY date DESC %s;", code, limitStr))
-
-		var dateCloses []dateClose
-		// 日付と終値の２つを取得
-		for i := 0; i < len(dbRet); i += 2 {
-			// int32型数値に変換
-			//c, _ := strconv.Atoi(dbRet[i+1].(string))
-			c, _ := strconv.ParseInt(dbRet[i+1].(string), 10, 64)
-			dateCloses = append(dateCloses, dateClose{Date: dbRet[i].(string), Close: c})
-			//log.Infof(ctx, "%s %s", dbRet[i], dbRet[i+1])
-		}
-		return dateCloses
-	}
-
-	//	calcCloseRate := func(dcs []dateClose) {
-	//		for i := 0; i < len(dcs)-1; i++ {
-	//			// 前日との比率
-	//			log.Infof(ctx, "date %s close %d rate %f", dcs[i].Date, dcs[i].Close, float64(dcs[i].Close)/float64(dcs[i+1].Close))
-	//		}
-	//	}
-
 	for _, code := range codes {
 		// 直近 100日分最近から順にソートして取得
-		dcs := orderedDateClose(code.(string), 100)
+		dcs, err := getOrderedDateCloses(r, db, code.(string), previousBussinessDay, 100)
+		if err != nil {
+			log.Errorf(ctx, "failed to getOrderedDateCloses. code: %s, err: %v", code, err)
+			os.Exit(0) // TODO: あとで消すか検討
+		}
 
 		// DBから取得できた日付のリスト
 		var dateList []string
@@ -286,7 +352,7 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 		// (日付;移動平均)のMapを3, 5, 7,...ごとに格納したMap
 		daysDateMovingMap := make(map[int]map[string]float64)
 		for _, d := range mvAvgList {
-			daysDateMovingMap[d] = movingAverage(dcs, d)
+			daysDateMovingMap[d] = movingAverage(r, dcs, d)
 		}
 		// 移動平均をDBに書き込み
 		insertMovingAvg(r, db, "movingavg", code.(string), dateList, daysDateMovingMap)
@@ -326,7 +392,9 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func movingAverage(dcs []dateClose, avgDays int) map[string]float64 {
+func movingAverage(r *http.Request, dcs []dateClose, avgDays int) map[string]float64 {
+	// GAE log
+	//ctx := appengine.NewContext(r)
 
 	dateMovingMap := make(map[string]float64) // 日付と移動平均のMap
 
@@ -340,8 +408,10 @@ func movingAverage(dcs []dateClose, avgDays int) map[string]float64 {
 		if date+days > length {
 			days = length - date
 		}
-		var sum int64
+		//var sum int64
+		var sum float64
 		for i := date; i < date+days; i++ {
+			//log.Infof(ctx, "movingAverage dcs[i].Close %v", dcs[i].Close)
 			sum += dcs[i].Close
 		}
 
@@ -356,20 +426,219 @@ func movingAverage(dcs []dateClose, avgDays int) map[string]float64 {
 	return dateMovingMap
 }
 
-func codeDateModprice(r *http.Request, resp [][]interface{}) [][]interface{} {
-	//ctx := appengine.NewContext(r)
-	matrix := make([][]interface{}, 0)
-	for _, v := range resp {
-		//log.Infof(ctx, "%v %v %v\n", v[0], v[1], v[len(v)-1])
-		cdmp := []interface{}{
-			interface{}(v[0]),        // 銘柄
-			interface{}(v[1]),        // 日付
-			interface{}(v[len(v)-1]), // 調整後終値
-		}
-		matrix = append(matrix, cdmp)
+func calcHandler(w http.ResponseWriter, r *http.Request) {
+	// GAE log
+	ctx := appengine.NewContext(r)
+
+	// get environment var, sheet, db
+	sheet, db, err := initialize(r)
+	if err != nil {
+		log.Errorf(ctx, "failed to initialize. err: %v", err)
+		os.Exit(0)
 	}
-	//log.Infof(ctx, "%v\n", matrix)
-	return matrix
+	log.Infof(ctx, "succeeded to initialize. got environment var, sheet, db.")
+	//log.Infof(ctx, "%v %v", sheet, db)
+
+	jst, _ := time.LoadLocation("Asia/Tokyo")
+	now := time.Now().In(jst)
+	// 休日データを取得
+	holidayMap := getHolidaysFromSheet(r, sheet)
+	// 前の日が休みの日だったら取得すべきデータがないので起動しない
+	if !isPreviousBussinessday(r, now, holidayMap) {
+		log.Infof(ctx, "Previous day is not business day.")
+		return
+	}
+
+	// test環境ではデータの存在する最新の日付に合わせる
+	previousBussinessDay := "2019/05/16"
+	// prod環境の場合は、直近の取引日を取得する
+	// 一日前から順番に見ていって、直近の休日ではない日を取引日として設定する
+	if runEnv != "test" {
+		// 直近の営業日を取得
+		previos, err := getPreviousBussinessDay(now, holidayMap)
+		if err != nil {
+			log.Errorf(ctx, "failed to getPreviousBussinessDay. %v", err)
+			os.Exit(0)
+		}
+		previousBussinessDay = previos
+	}
+	log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
+
+	// // ５日移動平均からの差分と、前日からの増加率を返す関数
+	// calcDiffCloseMoving5IncreasingRate := func(code string) (float64, float64, error) {
+	// 	dcs, err := getOrderedDateCloses(r, db, code, previousBussinessDay, 2)
+	// 	if err != nil {
+	// 		log.Errorf(ctx, "failed to getOrderedDateCloses. code: %s, err: %v", code, err)
+	// 		return 0.0, 0.0, err
+	// 	}
+	// 	//log.Debugf(ctx, "dcs: %v", dcs)
+	// 	log.Debugf(ctx, "dcs rate: %v %f", dcs[0].Close, float64(dcs[0].Close)/float64(dcs[1].Close))
+	// 	log.Debugf(ctx, "dcs rate2: %v %f", dcs[0].Close, dcs[0].Close/dcs[1].Close)
+
+	// 	moving5, err := getMoving5(r, db, code, dcs[0].Date)
+	// 	if err != nil {
+	// 		log.Errorf(ctx, "failed to getMoving5. code: %s, err: %v", code, err)
+	// 		return 0.0, 0.0, err
+	// 	}
+
+	// 	// 直近の日付の終値と５日移動平均の差
+	// 	diffCloseMoving5 := dcs[0].Close - moving5
+	// 	// 直近の日付の終値のその一つ前の日の終値に対する増加率
+	// 	increasingRate := dcs[0].Close / dcs[1].Close
+
+	// 	return diffCloseMoving5, increasingRate, nil
+	// }
+
+	// 前日の終値と前々日の終値が５日移動平均を横切ったものについてその変動率を返す
+	calcKahanshin := func(code string) (float64, error) {
+		// 前日と前々日の終値を取得
+		dcs, err := getOrderedDateCloses(r, db, code, previousBussinessDay, 2)
+		if err != nil {
+			log.Errorf(ctx, "failed to getOrderedDateCloses. code: %s, err: %v", code, err)
+			return 0.0, err
+		}
+
+		moving5, err := getMoving5(r, db, code, dcs[0].Date)
+		if err != nil {
+			log.Errorf(ctx, "failed to getMoving5. code: %s, err: %v", code, err)
+			return 0.0, err
+		}
+
+		// 陽線または陰線で横切る場合は増加率を返す
+		// 前日終値>５日移動平均>前々日終値 または 前々日終値>５日移動平均>前日終値
+		if (dcs[0].Close >= moving5 && moving5 >= dcs[1].Close) || (dcs[1].Close >= moving5 && moving5 >= dcs[0].Close) {
+			return dcs[0].Close / dcs[1].Close, nil
+		}
+		return 0.0, nil
+	}
+
+	// 最新の日付にある銘柄を取得
+	codes := fetchSelectResult(r, db,
+		"SELECT code FROM daily WHERE date = (SELECT date FROM daily ORDER BY date DESC LIMIT 1);")
+
+	// debug用
+	// codes := []interface{}{}
+	// codesStr := []string{"6758", "7201", "8058", "9432"}
+	// for _, v := range codesStr {
+	// 	codes = append(codes, v)
+	// }
+	log.Infof(ctx, "%v", codes)
+
+	// cdrs := codeDiffRates{}
+	// for _, code := range codes {
+	// 	diff, rate, err := calcDiffCloseMoving5IncreasingRate(code.(string))
+	// 	if err != nil {
+	// 		log.Errorf(ctx, "failed to calcDiffCloseMoving5IncreasingRate. code: %s, err: %v", code, err)
+	// 		os.Exit(0)
+	// 	}
+	// 	cdrs = append(cdrs, codeDiffRate{Code: code.(string), DiffCloseMoving5: diff, IncreasingRate: rate})
+	// }
+
+	// // 「終値-５日移動平均」の差が大きい順に並び替え
+	// sort.SliceStable(cdrs, func(i, j int) bool {
+	// 	return cdrs[i].DiffCloseMoving5 > cdrs[j].DiffCloseMoving5
+	// })
+
+	khsrs := kahanshinRates{}
+	for _, code := range codes {
+		c := code.(string)
+		k, err := calcKahanshin(c)
+		if err != nil {
+			log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", c, err)
+			os.Exit(0)
+		}
+		if k == 0.0 {
+			log.Debugf(ctx, "moving5 is not between closes. code: %s", c)
+			continue
+		}
+		khsrs = append(khsrs, kahanshinRate{Code: c, IncreasingRate: k})
+	}
+	if len(khsrs) != 0 {
+		// 「前日終値/前々日終値」の増加率が大きい順に並び替え
+		sort.SliceStable(khsrs, func(i, j int) bool {
+			return khsrs[i].IncreasingRate > khsrs[j].IncreasingRate
+		})
+
+		// 事前にSheetをclear
+		sheetName := "kahanshin"
+		if err := clearSheet(sheet, calcSheetID, sheetName); err != nil {
+			log.Errorf(ctx, "failed to clearSheet. sheetID: %s, sheetName: %s", calcSheetID, sheetName)
+			os.Exit(0)
+		}
+		log.Infof(ctx, "succeeded to clearSheet. sheetID: %s, sheetName: %s", calcSheetID, sheetName)
+
+		// Sheetへ書き込み
+		// [][]interface{}型に直してwriteSheetに渡す
+		//cdrsIF := cdrs.toInterface()
+		khsrsIF := khsrs.toInterface()
+		if err := writeSheet(sheet, calcSheetID, sheetName, khsrsIF); err != nil {
+			log.Errorf(ctx, "failed to writeSheet. sheetID: %s, sheetName: %s", calcSheetID, sheetName)
+			log.Infof(ctx, "error data: %v", khsrsIF)
+			os.Exit(0)
+		}
+		log.Infof(ctx, "succeeded to writeSheet. sheetID: %s, sheetName: %s", calcSheetID, sheetName)
+	} else {
+		log.Infof(ctx, "no data kahanshin")
+	}
+}
+
+// codeと取得する件数と検索する日付を与えると、
+// 日付と終値の構造体を直近の日付順にして配列で返す関数
+// 取得する件数 limit: 指定しない場合は0
+// 検索する日付 latestDate: 指定しない場合は空. 指定した場合はその日付を最新のものとして検索
+func getOrderedDateCloses(r *http.Request, db *sql.DB, code string, latestDate string, limit int) ([]dateClose, error) {
+	// TODO: ログ出さないならパラメータのrは不要
+	//ctx := appengine.NewContext(r)
+	limitStr := ""
+	if limit != 0 {
+		limitStr = fmt.Sprintf("LIMIT %d", limit)
+	}
+
+	latestDateStr := ""
+	if latestDate != "" {
+		latestDateStr = fmt.Sprintf("AND date <= '%s'", latestDate)
+	}
+
+	dbRet := fetchSelectResult(r, db, fmt.Sprintf(
+		"SELECT date, close FROM daily WHERE code = %s %s ORDER BY date DESC %s;", code, latestDateStr, limitStr))
+	if len(dbRet) == 0 {
+		return nil, fmt.Errorf("no selected data")
+	}
+
+	var dateCloses []dateClose
+	// 日付と終値の２つを取得
+	for i := 0; i < len(dbRet); i += 2 {
+		// float64型数値に変換
+		// 株価には小数点が入っていることがあるのでfloatで扱う
+		//c, _ := strconv.Atoi(dbRet[i+1].(string))
+		//c, err := strconv.ParseInt(dbRet[i+1].(string), 10, 64)
+		c, err := strconv.ParseFloat(dbRet[i+1].(string), 64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to ParseFloat. %v", err)
+		}
+		dateCloses = append(dateCloses, dateClose{Date: dbRet[i].(string), Close: c})
+		//log.Infof(ctx, "c: %v", c)
+		//log.Infof(ctx, "dbRet[i] %s dbRet[i+1] %s", dbRet[i], dbRet[i+1])
+	}
+	//log.Infof(ctx, "dateCloses %v", dateCloses)
+	return dateCloses, nil
+}
+
+// 銘柄コードと日付を渡すと該当の５日移動平均を返す
+func getMoving5(r *http.Request, db *sql.DB, code string, date string) (float64, error) {
+	//ctx := appengine.NewContext(r)
+
+	dbRet := fetchSelectResult(r, db, fmt.Sprintf(
+		"SELECT moving5 FROM movingavg WHERE code = %s and date = '%s';", code, date))
+	if len(dbRet) == 0 {
+		return 0.0, fmt.Errorf("no selected data")
+	}
+
+	// []interface {}型のdbRetをfloat64に変換
+	moving5, _ := strconv.ParseFloat(dbRet[0].(string), 64)
+
+	//log.Infof(ctx, "%f", moving5)
+	return moving5, nil
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
@@ -449,7 +718,11 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, wholeCodeRate)
 
 	// 事前にrateのシートをclear
-	clearSheet(sheetService, r, rateSheetID, "rate")
+	sheetName := "rate"
+	if err := clearSheet(sheetService, rateSheetID, sheetName); err != nil {
+		log.Errorf(ctx, "failed to clearSheet. sheetID: %s, sheetName: %s", rateSheetID, sheetName)
+		os.Exit(0)
+	}
 
 	// 株価の比率順にソートしたものを書き込み
 	writeRate(sheetService, r, wholeCodeRate, rateSheetID, "rate")
@@ -462,6 +735,7 @@ var (
 	stockPriceSheetID string
 	dailyRateSheetID  string
 	rateSheetID       string
+	calcSheetID       string
 )
 
 func getEnv(r *http.Request) {
@@ -479,7 +753,7 @@ func getEnv(r *http.Request) {
 	stockPriceSheetID = mustGetenv(r, "STOCKPRICE_SHEETID")
 	dailyRateSheetID = mustGetenv(r, "DAILYRATE_SHEETID")
 	rateSheetID = mustGetenv(r, "RATE_SHEETID")
-
+	calcSheetID = mustGetenv(r, "CALC_SHEETID")
 }
 
 // spreadsheetの'holiday' sheetを読み取って、{"2019/01/01", true}のような祝日のMapを作成して返す
@@ -524,6 +798,7 @@ func doScrapeDaily(r *http.Request, code string) ([][]string, error) {
 		// 始値, 高値, 安値, 終値, 売買高, 修正後終値を順に取得
 		s.Find(".a-taR").Each(func(j int, s2 *goquery.Selection) {
 			// ","を取り除く
+			// 終値 5,430 -> 5430 のように修正
 			arr = append(arr, strings.Replace(s2.Text(), ",", "", -1))
 		})
 		// 日付, 始値, 高値, 安値, 終値, 売買高, 修正後終値を一行ごとに格納
@@ -818,7 +1093,7 @@ func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// test環境ではデータの存在する最新の日付に合わせる
-	previousBussinessDay := "2018/09/18"
+	previousBussinessDay := "2019/05/16"
 	// prod環境の場合は、直近の取引日を取得する
 	// 一日前から順番に見ていって、直近の休日ではない日を取引日として設定する
 	if runEnv != "test" {

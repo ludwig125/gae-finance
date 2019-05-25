@@ -73,22 +73,39 @@ func getSheetData(r *http.Request, srv *sheets.Service, sheetID string, readRang
 	}
 }
 
-func clearSheet(srv *sheets.Service, r *http.Request, sid string, sname string) {
-	ctx := appengine.NewContext(r)
-
+func clearSheet(srv *sheets.Service, sid string, sname string) error {
 	// clear stockprice rate spreadsheet:
 	resp, err := srv.Spreadsheets.Values.Clear(sid, sname, &sheets.ClearValuesRequest{}).Do()
 	if err != nil {
-		log.Errorf(ctx, "Unable to clear value. %v", err)
-		return
+		return fmt.Errorf("Unable to clear value. %v", err)
 	}
 	status := resp.ServerResponse.HTTPStatusCode
 	if status != 200 {
-		log.Errorf(ctx, "HTTPstatus error. %v", status)
-		return
+		return fmt.Errorf("HTTPstatus error. %v", status)
 	}
+	return nil
 }
 
+// sheetのID, sheet名と対象のデータ（[][]interface{}型）を入力値にとり、
+// Sheetにデータを記入する関数
+func writeSheet(srv *sheets.Service, sid string, sname string, records [][]interface{}) error {
+	valueRange := &sheets.ValueRange{
+		MajorDimension: "ROWS",
+		Values:         records,
+	}
+	// Write stockprice rate spreadsheet:
+	resp, err := srv.Spreadsheets.Values.Append(sid, sname, valueRange).ValueInputOption("USER_ENTERED").InsertDataOption("INSERT_ROWS").Do()
+	if err != nil {
+		return fmt.Errorf("Unable to write value. %v", err)
+	}
+	status := resp.ServerResponse.HTTPStatusCode
+	if status != 200 {
+		return fmt.Errorf("HTTPstatus error. %v", status)
+	}
+	return nil
+}
+
+// TODO: writeSheetにあとで置き換える
 func writeRate(srv *sheets.Service, r *http.Request, rate []codeRate, sid string, sname string) {
 	ctx := appengine.NewContext(r)
 
