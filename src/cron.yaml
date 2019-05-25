@@ -3,10 +3,12 @@ cron:
 #  url: /
 #  schedule: every 60 minutes from 09:25 to 15:25
 #  timezone: Asia/Tokyo
+
 - description: "stockprice daily"
   url: /daily
   schedule: every day 01:00
   timezone: Asia/Tokyo
+
 #- description: "calculate stockprice daily rate"
 #  url: /calc_daily
 #  schedule: every day 04:00
@@ -22,4 +24,8 @@ cron:
 - description: "calculate moving average 5, 20, 60, 100"
   url: /movingavg
   schedule: every day 03:00
+  timezone: Asia/Tokyo
+- description: "calculate kahanshin"
+  url: /calc
+  schedule: every day 04:00
   timezone: Asia/Tokyo
