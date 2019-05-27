@@ -252,6 +252,7 @@ func dailyHandler(w http.ResponseWriter, r *http.Request) {
 		os.Exit(0)
 	}
 	log.Infof(ctx, "succeeded to write all records. target: %d, inserted: %d", target, inserted)
+	log.Infof(ctx, "done dailyHandler")
 }
 
 // 複数銘柄についてそれぞれの株価を取得する
@@ -332,6 +333,8 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 	codes := fetchSelectResult(r, db,
 		"SELECT code FROM daily WHERE date = (SELECT date FROM daily ORDER BY date DESC LIMIT 1);")
 
+	targetRecordNum := 0
+	insertedRecordNum := 0
 	for _, code := range codes {
 		// 直近 100日分最近から順にソートして取得
 		dcs, err := getOrderedDateCloses(r, db, code.(string), previousBussinessDay, 100)
@@ -340,6 +343,7 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 			os.Exit(0) // TODO: あとで消すか検討
 		}
 
+		// TODO: あとで消す
 		// DBから取得できた日付のリスト
 		var dateList []string
 		for date := 0; date < len(dcs); date++ {
@@ -348,15 +352,50 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 		log.Infof(ctx, "moving average target code %s, dateSize: %d", code.(string), len(dateList))
 
 		// 取得対象の移動平均
-		mvAvgList := []int{3, 5, 7, 10, 20, 60, 100}
+		movingDayList := []int{3, 5, 7, 10, 20, 60, 100}
 		// (日付;移動平均)のMapを3, 5, 7,...ごとに格納したMap
 		daysDateMovingMap := make(map[int]map[string]float64)
-		for _, d := range mvAvgList {
+		for _, d := range movingDayList {
 			daysDateMovingMap[d] = movingAverage(r, dcs, d)
 		}
+
+		// // 移動平均をDBに書き込み
+		// insertMovingAvg(r, db, "movingavg", code.(string), dateList, daysDateMovingMap)
+
+		// DBから取得できた日付はdcs[date].Dateで取れる
+		// code, date, moving3, moving5, moving7...のレコードを[][]stringの形にする
+		var codeDateMovings [][]string
+		for dateNum := 0; dateNum < len(dcs); dateNum++ {
+			date := dcs[dateNum].Date
+			var codeDateMoving []string
+			codeDateMoving = append(codeDateMoving, code.(string))
+			codeDateMoving = append(codeDateMoving, date)
+			for _, movingDay := range movingDayList {
+				// 3, 5, 7, 10, 20の順に対象の移動平均をスライスに詰める
+				codeDateMoving = append(codeDateMoving, fmt.Sprintf("%f", daysDateMovingMap[movingDay][date]))
+			}
+			codeDateMovings = append(codeDateMovings, codeDateMoving)
+		}
+		log.Infof(ctx, "moving average target code %s, dateSize: %d", code.(string), len(codeDateMovings))
+		//log.Debugf(ctx, "codeDateMovings %v", codeDateMovings)
+		movingavgColumns := []string{"code", "date", "moving3", "moving5", "moving7", "moving10", "moving20", "moving60", "moving100"}
+
 		// 移動平均をDBに書き込み
-		insertMovingAvg(r, db, "movingavg", code.(string), dateList, daysDateMovingMap)
+		// movingavgをcloudsqlに挿入
+		ins, err := insertDB(r, db, "movingavg", movingavgColumns, codeDateMovings)
+		targetRecordNum += ins
+		if err != nil {
+			log.Errorf(ctx, "failed to insertDB. %v", err)
+			continue
+		}
+		insertedRecordNum += ins
 	}
+	if targetRecordNum != insertedRecordNum {
+		log.Errorf(ctx, "failed to write all records. target: %d, inserted: %d", targetRecordNum, insertedRecordNum)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "succeeded to write all records. target: %d, inserted: %d", targetRecordNum, insertedRecordNum)
+	log.Infof(ctx, "done movingAvgHandler")
 
 	// 以下のgoroutineを実行したら以下のエラーが発生
 	// A problem was encountered with the process that handled this request, causing it to exit. This is likely to cause a new process to be used for the next request to your application. (Error code 204)
@@ -376,10 +415,10 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 	//			}
 	//
 	//			// 取得対象の移動平均
-	//			mvAvgList := []int{5, 20, 60, 100}
+	//			movingDayList := []int{5, 20, 60, 100}
 	//			// (日付;移動平均)のMapを5, 20,...ごとに格納したMap
 	//			daysDateMovingMap := make(map[int]map[string]float64)
-	//			for _, d := range mvAvgList {
+	//			for _, d := range movingDayList {
 	//				// 移動平均の計算
 	//				daysDateMovingMap[d] = movingAverage(dcs, d)
 	//			}
