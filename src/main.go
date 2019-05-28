@@ -343,14 +343,6 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 			os.Exit(0) // TODO: あとで消すか検討
 		}
 
-		// TODO: あとで消す
-		// DBから取得できた日付のリスト
-		var dateList []string
-		for date := 0; date < len(dcs); date++ {
-			dateList = append(dateList, dcs[date].Date)
-		}
-		log.Infof(ctx, "moving average target code %s, dateSize: %d", code.(string), len(dateList))
-
 		// 取得対象の移動平均
 		movingDayList := []int{3, 5, 7, 10, 20, 60, 100}
 		// (日付;移動平均)のMapを3, 5, 7,...ごとに格納したMap
@@ -358,9 +350,6 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 		for _, d := range movingDayList {
 			daysDateMovingMap[d] = movingAverage(r, dcs, d)
 		}
-
-		// // 移動平均をDBに書き込み
-		// insertMovingAvg(r, db, "movingavg", code.(string), dateList, daysDateMovingMap)
 
 		// DBから取得できた日付はdcs[date].Dateで取れる
 		// code, date, moving3, moving5, moving7...のレコードを[][]stringの形にする
@@ -370,8 +359,8 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 			var codeDateMoving []string
 			codeDateMoving = append(codeDateMoving, code.(string))
 			codeDateMoving = append(codeDateMoving, date)
+			// movingDayList(3, 5, 7, 10, 20...)の順に対象の移動平均をスライスに詰める
 			for _, movingDay := range movingDayList {
-				// 3, 5, 7, 10, 20の順に対象の移動平均をスライスに詰める
 				codeDateMoving = append(codeDateMoving, fmt.Sprintf("%f", daysDateMovingMap[movingDay][date]))
 			}
 			codeDateMovings = append(codeDateMovings, codeDateMoving)
