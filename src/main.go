@@ -158,8 +158,11 @@ func connectDBHandler(w http.ResponseWriter, r *http.Request) {
 
 	showDatabases(w, db)
 
-	countDaily := fetchSelectResult(r, db, "SELECT COUNT(*) FROM daily;")
-	fmt.Fprintf(w, "Total 'daily' records: %v\n", countDaily)
+	countDaily, err := selectTable(r, db, "SELECT COUNT(*) FROM daily;")
+	if err != nil {
+		fmt.Fprintf(w, "Failed to select table %v\n", err)
+	}
+	fmt.Fprintf(w, "Total 'daily' records: %s\n", countDaily[0])
 }
 
 func dailyHandler(w http.ResponseWriter, r *http.Request) {
@@ -252,7 +255,7 @@ func dailyHandler(w http.ResponseWriter, r *http.Request) {
 		os.Exit(0)
 	}
 	log.Infof(ctx, "succeeded to write all records. target: %d, inserted: %d", target, inserted)
-	log.Infof(ctx, "done dailyHandler")
+	log.Infof(ctx, "done dailyHandler.")
 }
 
 // 複数銘柄についてそれぞれの株価を取得する
@@ -330,17 +333,20 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 	log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
 
 	// 最新の日付にある銘柄を取得
-	codes := fetchSelectResult(r, db,
+	codes, err := selectTable(r, db,
 		"SELECT code FROM daily WHERE date = (SELECT date FROM daily ORDER BY date DESC LIMIT 1);")
-
+	if err != nil {
+		log.Errorf(ctx, "failed to selectTable %v", err)
+		os.Exit(0)
+	}
 	targetRecordNum := 0
 	insertedRecordNum := 0
 	for _, code := range codes {
 		// 直近 100日分最近から順にソートして取得
-		dcs, err := getOrderedDateCloses(r, db, code.(string), previousBussinessDay, 100)
+		dcs, err := getOrderedDateCloses(r, db, code, previousBussinessDay, 100)
 		if err != nil {
 			log.Errorf(ctx, "failed to getOrderedDateCloses. code: %s, err: %v", code, err)
-			os.Exit(0) // TODO: あとで消すか検討
+			os.Exit(0)
 		}
 
 		// 取得対象の移動平均
@@ -357,7 +363,7 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 		for dateNum := 0; dateNum < len(dcs); dateNum++ {
 			date := dcs[dateNum].Date
 			var codeDateMoving []string
-			codeDateMoving = append(codeDateMoving, code.(string))
+			codeDateMoving = append(codeDateMoving, code)
 			codeDateMoving = append(codeDateMoving, date)
 			// movingDayList(3, 5, 7, 10, 20...)の順に対象の移動平均をスライスに詰める
 			for _, movingDay := range movingDayList {
@@ -365,7 +371,7 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			codeDateMovings = append(codeDateMovings, codeDateMoving)
 		}
-		log.Infof(ctx, "moving average target code %s, dateSize: %d", code.(string), len(codeDateMovings))
+		log.Infof(ctx, "moving average target code %s, dateSize: %d", code, len(codeDateMovings))
 		//log.Debugf(ctx, "codeDateMovings %v", codeDateMovings)
 		movingavgColumns := []string{"code", "date", "moving3", "moving5", "moving7", "moving10", "moving20", "moving60", "moving100"}
 
@@ -384,7 +390,7 @@ func movingAvgHandler(w http.ResponseWriter, r *http.Request) {
 		os.Exit(0)
 	}
 	log.Infof(ctx, "succeeded to write all records. target: %d, inserted: %d", targetRecordNum, insertedRecordNum)
-	log.Infof(ctx, "done movingAvgHandler")
+	log.Infof(ctx, "done movingAvgHandler.")
 
 	// 以下のgoroutineを実行したら以下のエラーが発生
 	// A problem was encountered with the process that handled this request, causing it to exit. This is likely to cause a new process to be used for the next request to your application. (Error code 204)
@@ -541,16 +547,19 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 最新の日付にある銘柄を取得
-	codes := fetchSelectResult(r, db,
+	codes, err := selectTable(r, db,
 		"SELECT code FROM daily WHERE date = (SELECT date FROM daily ORDER BY date DESC LIMIT 1);")
-
+	if err != nil {
+		log.Errorf(ctx, "failed to selectTable %v", err)
+		os.Exit(0)
+	}
 	// debug用
 	// codes := []interface{}{}
 	// codesStr := []string{"6758", "7201", "8058", "9432"}
 	// for _, v := range codesStr {
 	// 	codes = append(codes, v)
 	// }
-	log.Infof(ctx, "%v", codes)
+	log.Infof(ctx, "codes %v", codes)
 
 	// cdrs := codeDiffRates{}
 	// for _, code := range codes {
@@ -569,17 +578,16 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 
 	khsrs := kahanshinRates{}
 	for _, code := range codes {
-		c := code.(string)
-		k, err := calcKahanshin(c)
+		k, err := calcKahanshin(code)
 		if err != nil {
-			log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", c, err)
+			log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", code, err)
 			os.Exit(0)
 		}
 		if k == 0.0 {
-			log.Debugf(ctx, "moving5 is not between closes. code: %s", c)
+			log.Debugf(ctx, "moving5 is not between closes. code: %s", code)
 			continue
 		}
-		khsrs = append(khsrs, kahanshinRate{Code: c, IncreasingRate: k})
+		khsrs = append(khsrs, kahanshinRate{Code: code, IncreasingRate: k})
 	}
 	if len(khsrs) != 0 {
 		// 「前日終値/前々日終値」の増加率が大きい順に並び替え
@@ -608,6 +616,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Infof(ctx, "no data kahanshin")
 	}
+	log.Infof(ctx, "done calcHandler.")
 }
 
 // codeと取得する件数と検索する日付を与えると、
@@ -627,8 +636,11 @@ func getOrderedDateCloses(r *http.Request, db *sql.DB, code string, latestDate s
 		latestDateStr = fmt.Sprintf("AND date <= '%s'", latestDate)
 	}
 
-	dbRet := fetchSelectResult(r, db, fmt.Sprintf(
+	dbRet, err := selectTable(r, db, fmt.Sprintf(
 		"SELECT date, close FROM daily WHERE code = %s %s ORDER BY date DESC %s;", code, latestDateStr, limitStr))
+	if err != nil {
+		return nil, fmt.Errorf("failed to selectTable %v", err)
+	}
 	if len(dbRet) == 0 {
 		return nil, fmt.Errorf("no selected data")
 	}
@@ -640,11 +652,11 @@ func getOrderedDateCloses(r *http.Request, db *sql.DB, code string, latestDate s
 		// 株価には小数点が入っていることがあるのでfloatで扱う
 		//c, _ := strconv.Atoi(dbRet[i+1].(string))
 		//c, err := strconv.ParseInt(dbRet[i+1].(string), 10, 64)
-		c, err := strconv.ParseFloat(dbRet[i+1].(string), 64)
+		c, err := strconv.ParseFloat(dbRet[i+1], 64)
 		if err != nil {
 			return nil, fmt.Errorf("failed to ParseFloat. %v", err)
 		}
-		dateCloses = append(dateCloses, dateClose{Date: dbRet[i].(string), Close: c})
+		dateCloses = append(dateCloses, dateClose{Date: dbRet[i], Close: c})
 		//log.Infof(ctx, "c: %v", c)
 		//log.Infof(ctx, "dbRet[i] %s dbRet[i+1] %s", dbRet[i], dbRet[i+1])
 	}
@@ -656,14 +668,17 @@ func getOrderedDateCloses(r *http.Request, db *sql.DB, code string, latestDate s
 func getMoving5(r *http.Request, db *sql.DB, code string, date string) (float64, error) {
 	//ctx := appengine.NewContext(r)
 
-	dbRet := fetchSelectResult(r, db, fmt.Sprintf(
+	dbRet, err := selectTable(r, db, fmt.Sprintf(
 		"SELECT moving5 FROM movingavg WHERE code = %s and date = '%s';", code, date))
+	if err != nil {
+		return 0.0, fmt.Errorf("failed to selectTable %v", err)
+	}
 	if len(dbRet) == 0 {
 		return 0.0, fmt.Errorf("no selected data")
 	}
 
 	// []interface {}型のdbRetをfloat64に変換
-	moving5, _ := strconv.ParseFloat(dbRet[0].(string), 64)
+	moving5, _ := strconv.ParseFloat(dbRet[0], 64)
 
 	//log.Infof(ctx, "%f", moving5)
 	return moving5, nil
@@ -1146,13 +1161,17 @@ func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
 		log.Infof(ctx, "Succeded to open db")
 
 		query := fmt.Sprintf("SELECT code FROM daily WHERE date = '%s'", previousBussinessDay)
-		dbRet := fetchSelectResult(r, db, query)
+		dbRet, err := selectTable(r, db, query)
+		if err != nil {
+			log.Errorf(ctx, "failed to selectTable %v", err)
+			os.Exit(0)
+		}
 		log.Infof(ctx, "fetched %d codes from 'daily' in db. target date: %s", len(dbRet), previousBussinessDay)
 
 		// あとで全銘柄と比較するためにmapに格納
 		dbCodesMap := map[int]bool{}
 		for _, v := range dbRet {
-			code, _ := strconv.Atoi(v.(string)) // int型に変換
+			code, _ := strconv.Atoi(v)
 			dbCodesMap[code] = true
 		}
 		//log.Infof(ctx, "dbcodes %v", dbCodesMap)
@@ -1184,6 +1203,7 @@ func ensureDailyDBHandler(w http.ResponseWriter, r *http.Request) {
 		os.Exit(0)
 	}
 	log.Infof(ctx, "succeeded to write all %d codes data to db.", len(dbCodesMap))
+	log.Infof(ctx, "done ensureDailyDBHandler.")
 }
 
 // 与えられた日付の前日が取引日かどうかを判定する関数
