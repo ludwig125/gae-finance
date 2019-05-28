@@ -471,7 +471,6 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		os.Exit(0)
 	}
 	log.Infof(ctx, "succeeded to initialize. got environment var, sheet, db.")
-	//log.Infof(ctx, "%v %v", sheet, db)
 
 	jst, _ := time.LoadLocation("Asia/Tokyo")
 	now := time.Now().In(jst)
@@ -497,31 +496,6 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		previousBussinessDay = previos
 	}
 	log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
-
-	// // ５日移動平均からの差分と、前日からの増加率を返す関数
-	// calcDiffCloseMoving5IncreasingRate := func(code string) (float64, float64, error) {
-	// 	dcs, err := getOrderedDateCloses(r, db, code, previousBussinessDay, 2)
-	// 	if err != nil {
-	// 		log.Errorf(ctx, "failed to getOrderedDateCloses. code: %s, err: %v", code, err)
-	// 		return 0.0, 0.0, err
-	// 	}
-	// 	//log.Debugf(ctx, "dcs: %v", dcs)
-	// 	log.Debugf(ctx, "dcs rate: %v %f", dcs[0].Close, float64(dcs[0].Close)/float64(dcs[1].Close))
-	// 	log.Debugf(ctx, "dcs rate2: %v %f", dcs[0].Close, dcs[0].Close/dcs[1].Close)
-
-	// 	moving5, err := getMoving5(r, db, code, dcs[0].Date)
-	// 	if err != nil {
-	// 		log.Errorf(ctx, "failed to getMoving5. code: %s, err: %v", code, err)
-	// 		return 0.0, 0.0, err
-	// 	}
-
-	// 	// 直近の日付の終値と５日移動平均の差
-	// 	diffCloseMoving5 := dcs[0].Close - moving5
-	// 	// 直近の日付の終値のその一つ前の日の終値に対する増加率
-	// 	increasingRate := dcs[0].Close / dcs[1].Close
-
-	// 	return diffCloseMoving5, increasingRate, nil
-	// }
 
 	// 前日の終値と前々日の終値が５日移動平均を横切ったものについてその変動率を返す
 	calcKahanshin := func(code string) (float64, error) {
@@ -560,21 +534,6 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	// 	codes = append(codes, v)
 	// }
 	log.Infof(ctx, "codes %v", codes)
-
-	// cdrs := codeDiffRates{}
-	// for _, code := range codes {
-	// 	diff, rate, err := calcDiffCloseMoving5IncreasingRate(code.(string))
-	// 	if err != nil {
-	// 		log.Errorf(ctx, "failed to calcDiffCloseMoving5IncreasingRate. code: %s, err: %v", code, err)
-	// 		os.Exit(0)
-	// 	}
-	// 	cdrs = append(cdrs, codeDiffRate{Code: code.(string), DiffCloseMoving5: diff, IncreasingRate: rate})
-	// }
-
-	// // 「終値-５日移動平均」の差が大きい順に並び替え
-	// sort.SliceStable(cdrs, func(i, j int) bool {
-	// 	return cdrs[i].DiffCloseMoving5 > cdrs[j].DiffCloseMoving5
-	// })
 
 	khsrs := kahanshinRates{}
 	for _, code := range codes {
@@ -650,14 +609,11 @@ func getOrderedDateCloses(r *http.Request, db *sql.DB, code string, latestDate s
 	for i := 0; i < len(dbRet); i += 2 {
 		// float64型数値に変換
 		// 株価には小数点が入っていることがあるのでfloatで扱う
-		//c, _ := strconv.Atoi(dbRet[i+1].(string))
-		//c, err := strconv.ParseInt(dbRet[i+1].(string), 10, 64)
 		c, err := strconv.ParseFloat(dbRet[i+1], 64)
 		if err != nil {
 			return nil, fmt.Errorf("failed to ParseFloat. %v", err)
 		}
 		dateCloses = append(dateCloses, dateClose{Date: dbRet[i], Close: c})
-		//log.Infof(ctx, "c: %v", c)
 		//log.Infof(ctx, "dbRet[i] %s dbRet[i+1] %s", dbRet[i], dbRet[i+1])
 	}
 	//log.Infof(ctx, "dateCloses %v", dateCloses)
