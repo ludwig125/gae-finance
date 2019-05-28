@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 
 	"google.golang.org/appengine" // Required external App Engine library
@@ -104,14 +103,13 @@ func showDatabases(w http.ResponseWriter, db *sql.DB) {
 	w.Write(buf.Bytes())
 }
 
-// TODO: error 返すようにする
-func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
+func selectTable(r *http.Request, db *sql.DB, q string) ([]string, error) {
 	ctx := appengine.NewContext(r)
+	log.Infof(ctx, "select query: %s", q)
 
 	rows, err := db.Query(q)
 	if err != nil {
-		log.Errorf(ctx, "failed to select. query: [%s], err: %v", q, err)
-		return nil
+		return nil, fmt.Errorf("failed to select. query: [%s], err: %v", q, err)
 	}
 	defer rows.Close()
 
@@ -119,7 +117,7 @@ func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
 	// テーブルから列名を取得する
 	columns, err := rows.Columns()
 	if err != nil {
-		log.Errorf(ctx, fmt.Sprintf("failed to get columns: %v", err))
+		return nil, fmt.Errorf("failed to get columns: %v", err)
 	}
 
 	// 列の長さ分だけのvalues
@@ -139,14 +137,14 @@ func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
 	}
 
 	// select結果を詰める入れ物
-	retVals := make([]interface{}, 0)
+	retVals := make([]string, 0)
 
 	// Fetch rows
 	for rows.Next() {
 		// get RawBytes from data
 		err = rows.Scan(scanArgs...)
 		if err != nil {
-			log.Errorf(ctx, "failed to scan: %v", err)
+			return nil, fmt.Errorf("failed to scan: %v", err)
 		}
 
 		for _, col := range values {
@@ -159,20 +157,7 @@ func selectTable(r *http.Request, db *sql.DB, q string) []interface{} {
 		}
 	}
 	if err = rows.Err(); err != nil {
-		log.Errorf(ctx, "row error: %v", err)
+		return nil, fmt.Errorf("row error: %v", err)
 	}
-	return retVals
-}
-
-// selectTableの結果を返す関数
-func fetchSelectResult(r *http.Request, db *sql.DB, q string) []interface{} {
-	// GAE log
-	ctx := appengine.NewContext(r)
-	log.Infof(ctx, "select query: %s", q)
-	dbRet := selectTable(r, db, q)
-	if dbRet == nil {
-		log.Errorf(ctx, "selectTable failed")
-		os.Exit(0)
-	}
-	return dbRet
+	return retVals, nil
 }
