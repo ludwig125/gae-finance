@@ -33,6 +33,67 @@ type dateClose struct {
 	Close float64
 }
 
+// 1: PPP : 5 > 20 > 60 > 100
+// 2: semiPPP : 5 > 20 > 60
+// 3: oppositeSemiPPP : 60 > 20 > 5
+// 4: oppositePPP : 100 > 60 > 20 > 5
+// 0: NON : other
+type pppKind int
+
+const (
+	non pppKind = iota
+	ppp
+	semiPPP
+	oppositeSemiPPP
+	oppositePPP
+)
+
+func (p pppKind) String() string {
+	return [5]string{"non", "ppp", "semiPPP", "oppositeSemiPPP", "oppositePPP"}[p]
+}
+
+// 可変長引数a, b, c...が a > b > cの順番のときにtrue
+func isALargerThanB(movings ...float64) bool {
+	max := movings[0]
+	for m := 1; m < len(movings); m++ {
+		if max > movings[m] {
+			max = movings[m]
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+type movings struct {
+	Moving5   float64
+	Moving20  float64
+	Moving60  float64
+	Moving100 float64
+}
+
+func (m movings) calcPPPKind() pppKind {
+	// moving5 > moving20 > moving60 > moving100の並びのときPPP
+	if isALargerThanB(m.Moving5, m.Moving20, m.Moving60, m.Moving100) {
+		return ppp
+	}
+	if isALargerThanB(m.Moving5, m.Moving20, m.Moving60) {
+		return semiPPP
+	}
+	if isALargerThanB(m.Moving60, m.Moving20, m.Moving5) {
+		return oppositeSemiPPP
+	}
+	if isALargerThanB(m.Moving100, m.Moving60, m.Moving20, m.Moving5) {
+		return oppositePPP
+	}
+	return non
+}
+
+type pppInfo struct {
+	PPP     pppKind
+	Movings movings
+}
+
 // type codeDiffRate struct {
 // 	Code             string
 // 	DiffCloseMoving5 float64 // 直近の終値と５日移動平均の差
@@ -497,29 +558,6 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
 
-	// 前日の終値と前々日の終値が５日移動平均を横切ったものについてその変動率を返す
-	calcKahanshin := func(code string) (float64, error) {
-		// 前日と前々日の終値を取得
-		dcs, err := getOrderedDateCloses(r, db, code, previousBussinessDay, 2)
-		if err != nil {
-			log.Errorf(ctx, "failed to getOrderedDateCloses. code: %s, err: %v", code, err)
-			return 0.0, err
-		}
-
-		moving5, err := getMoving5(r, db, code, dcs[0].Date)
-		if err != nil {
-			log.Errorf(ctx, "failed to getMoving5. code: %s, err: %v", code, err)
-			return 0.0, err
-		}
-
-		// 陽線または陰線で横切る場合は増加率を返す
-		// 前日終値>５日移動平均>前々日終値 または 前々日終値>５日移動平均>前日終値
-		if (dcs[0].Close >= moving5 && moving5 >= dcs[1].Close) || (dcs[1].Close >= moving5 && moving5 >= dcs[0].Close) {
-			return dcs[0].Close / dcs[1].Close, nil
-		}
-		return 0.0, nil
-	}
-
 	// 最新の日付にある銘柄を取得
 	codes, err := selectTable(r, db,
 		"SELECT code FROM daily WHERE date = (SELECT date FROM daily ORDER BY date DESC LIMIT 1);")
@@ -535,6 +573,50 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	// }
 	log.Infof(ctx, "codes %v", codes)
 
+	// 移動平均線の並びからPPPの種類を判定
+	// TODO: エラーハンドリングする
+	calcPPP := func(code string) (pppInfo, error) {
+		moving5, _ := getMoving(r, db, code, "moving5", previousBussinessDay)
+		moving20, _ := getMoving(r, db, code, "moving20", previousBussinessDay)
+		moving60, _ := getMoving(r, db, code, "moving60", previousBussinessDay)
+		moving100, _ := getMoving(r, db, code, "moving100", previousBussinessDay)
+		log.Debugf(ctx, "moving %v %v %v %v", moving5, moving20, moving60, moving100)
+		m := movings{moving5, moving20, moving60, moving100}
+		return pppInfo{m.calcPPPKind(), m}, nil
+	}
+
+	for _, code := range codes {
+		p, err := calcPPP(code)
+		if err != nil {
+			log.Errorf(ctx, "failed to calcPPP. code: %s, err: %v", code, err)
+			os.Exit(0)
+		}
+		log.Debugf(ctx, "ppp type :%v", p)
+	}
+
+	// 前日の終値と前々日の終値が５日移動平均を横切ったものについてその変動率を返す
+	calcKahanshin := func(code string) (float64, error) {
+		// 前日と前々日の終値を取得
+		dcs, err := getOrderedDateCloses(r, db, code, previousBussinessDay, 2)
+		if err != nil {
+			return 0.0, fmt.Errorf("failed to getOrderedDateCloses. code: %s, err: %v", code, err)
+		}
+
+		movingDay := "moving5"
+		moving5, err := getMoving(r, db, code, movingDay, dcs[0].Date)
+		if err != nil {
+			return 0.0, fmt.Errorf("failed to getMoving. code: %s, moving: %s, err: %v", code, movingDay, err)
+		}
+		//log.Debugf(ctx, "moving5_2 %v", moving5_2)
+
+		// 陽線または陰線で横切る場合は増加率を返す
+		// 前日終値>５日移動平均>前々日終値 または 前々日終値>５日移動平均>前日終値
+		if (dcs[0].Close >= moving5 && moving5 >= dcs[1].Close) || (dcs[1].Close >= moving5 && moving5 >= dcs[0].Close) {
+			return dcs[0].Close / dcs[1].Close, nil
+		}
+		return 0.0, nil
+	}
+
 	khsrs := kahanshinRates{}
 	for _, code := range codes {
 		k, err := calcKahanshin(code)
@@ -547,6 +629,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		khsrs = append(khsrs, kahanshinRate{Code: code, IncreasingRate: k})
+
 	}
 	if len(khsrs) != 0 {
 		// 「前日終値/前々日終値」の増加率が大きい順に並び替え
@@ -575,6 +658,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Infof(ctx, "no data kahanshin")
 	}
+
 	log.Infof(ctx, "done calcHandler.")
 }
 
@@ -620,12 +704,12 @@ func getOrderedDateCloses(r *http.Request, db *sql.DB, code string, latestDate s
 	return dateCloses, nil
 }
 
-// 銘柄コードと日付を渡すと該当の５日移動平均を返す
-func getMoving5(r *http.Request, db *sql.DB, code string, date string) (float64, error) {
+// 銘柄コード、必要な移動平均、日付を渡すと該当のX日移動平均を返す
+func getMoving(r *http.Request, db *sql.DB, code string, movingDay string, date string) (float64, error) {
 	//ctx := appengine.NewContext(r)
 
 	dbRet, err := selectTable(r, db, fmt.Sprintf(
-		"SELECT moving5 FROM movingavg WHERE code = %s and date = '%s';", code, date))
+		"SELECT %s FROM movingavg WHERE code = %s and date = '%s';", movingDay, code, date))
 	if err != nil {
 		return 0.0, fmt.Errorf("failed to selectTable %v", err)
 	}
@@ -634,10 +718,10 @@ func getMoving5(r *http.Request, db *sql.DB, code string, date string) (float64,
 	}
 
 	// []interface {}型のdbRetをfloat64に変換
-	moving5, _ := strconv.ParseFloat(dbRet[0], 64)
+	moving, _ := strconv.ParseFloat(dbRet[0], 64)
 
-	//log.Infof(ctx, "%f", moving5)
-	return moving5, nil
+	//log.Infof(ctx, "%f", moving)
+	return moving, nil
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
