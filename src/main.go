@@ -109,33 +109,6 @@ type pppInfo struct {
 	Movings movings
 }
 
-// type codeDiffRate struct {
-// 	Code             string
-// 	DiffCloseMoving5 float64 // 直近の終値と５日移動平均の差
-// 	IncreasingRate   float64 // 直近の終値のその一つ前の終値との増加率
-// }
-
-// // codeDiffRateの要素を全てinterfaceにするメソッド
-// func (cdr *codeDiffRate) toInterface() []interface{} {
-// 	var cdrIF []interface{}
-// 	cdrIF = append(cdrIF, cdr.Code)
-// 	cdrIF = append(cdrIF, cdr.DiffCloseMoving5)
-// 	cdrIF = append(cdrIF, cdr.IncreasingRate)
-// 	return cdrIF
-// }
-
-// type codeDiffRates []codeDiffRate
-
-// // codeDiffRatesを[][]interfaceにするメソッド
-// // SpreadSheetへの書き込みのためにinterface型にする必要がある
-// func (cdrs *codeDiffRates) toInterface() [][]interface{} {
-// 	var cdrsIF [][]interface{}
-// 	for _, cdr := range *cdrs {
-// 		cdrsIF = append(cdrsIF, cdr.toInterface())
-// 	}
-// 	return cdrsIF
-// }
-
 // 前日の終値と前々日の終値が５日移動平均を横切る場合のその増加率
 type kahanshinRate struct {
 	Code           string
