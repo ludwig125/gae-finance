@@ -33,6 +33,34 @@ type dateClose struct {
 	Close float64
 }
 
+// 可変長引数a, b, c...が a > b > cの順番のときにtrue
+// TODO: 型を汎用的にしたい。このコードの置く場所変えたい
+func isAGreaterThanB(params ...float64) bool {
+	max := params[0]
+	for m := 1; m < len(params); m++ {
+		if max > params[m] {
+			max = params[m]
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// 可変長引数a, b, c...が a >= b >= cの順番のときにtrue
+// TODO: 型を汎用的にしたい。このコードの置く場所変えたい
+func isAGreaterThanOrEqualToB(params ...float64) bool {
+	max := params[0]
+	for m := 1; m < len(params); m++ {
+		if max >= params[m] {
+			max = params[m]
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // 1: PPP : 5 > 20 > 60 > 100
 // 2: semiPPP : 5 > 20 > 60
 // 3: oppositeSemiPPP : 60 > 20 > 5
@@ -52,19 +80,6 @@ func (p pppKind) String() string {
 	return [5]string{"non", "ppp", "semiPPP", "oppositeSemiPPP", "oppositePPP"}[p]
 }
 
-// 可変長引数a, b, c...が a > b > cの順番のときにtrue
-func isALargerThanB(movings ...float64) bool {
-	max := movings[0]
-	for m := 1; m < len(movings); m++ {
-		if max > movings[m] {
-			max = movings[m]
-			continue
-		}
-		return false
-	}
-	return true
-}
-
 type movings struct {
 	Moving5   float64
 	Moving20  float64
@@ -74,16 +89,16 @@ type movings struct {
 
 func (m movings) calcPPPKind() pppKind {
 	// moving5 > moving20 > moving60 > moving100の並びのときPPP
-	if isALargerThanB(m.Moving5, m.Moving20, m.Moving60, m.Moving100) {
+	if isAGreaterThanB(m.Moving5, m.Moving20, m.Moving60, m.Moving100) {
 		return ppp
 	}
-	if isALargerThanB(m.Moving5, m.Moving20, m.Moving60) {
+	if isAGreaterThanB(m.Moving5, m.Moving20, m.Moving60) {
 		return semiPPP
 	}
-	if isALargerThanB(m.Moving60, m.Moving20, m.Moving5) {
+	if isAGreaterThanB(m.Moving60, m.Moving20, m.Moving5) {
 		return oppositeSemiPPP
 	}
-	if isALargerThanB(m.Moving100, m.Moving60, m.Moving20, m.Moving5) {
+	if isAGreaterThanB(m.Moving100, m.Moving60, m.Moving20, m.Moving5) {
 		return oppositePPP
 	}
 	return non
@@ -611,7 +626,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 
 		// 陽線または陰線で横切る場合は増加率を返す
 		// 前日終値>５日移動平均>前々日終値 または 前々日終値>５日移動平均>前日終値
-		if (dcs[0].Close >= moving5 && moving5 >= dcs[1].Close) || (dcs[1].Close >= moving5 && moving5 >= dcs[0].Close) {
+		if isAGreaterThanOrEqualToB(dcs[0].Close, moving5, dcs[1].Close) || isAGreaterThanOrEqualToB(dcs[1].Close, moving5, dcs[0].Close) {
 			return dcs[0].Close / dcs[1].Close, nil
 		}
 		return 0.0, nil
