@@ -69,13 +69,20 @@ func toInterfaceSlice(v interface{}) []interface{} {
 	var vs []interface{}
 
 	rv := reflect.ValueOf(v)
+	// パラメータvが構造体のポインタのときはElemでポインタの指している先の値を取得する
 	if rv.Kind() == reflect.Ptr {
 		// vが構造体のポインタの時はここを通る
 		rv = reflect.ValueOf(v).Elem()
 	}
 	rt := rv.Type()
 	for i := 0; i < rt.NumField(); i++ {
-		vs = append(vs, rv.Field(i).Interface())
+		if rv.Field(i).Kind() == reflect.Struct {
+			// フィールドがstructの場合は再帰でinterfaceのSliceを取得して後ろにつなげる
+			sl := toInterfaceSlice(rv.Field(i).Interface())
+			vs = append(vs, sl...)
+		} else {
+			vs = append(vs, rv.Field(i).Interface())
+		}
 	}
 	return vs
 }
@@ -135,6 +142,8 @@ type pppInfo struct {
 // 	return toInterfaceSlice(p)
 // }
 
+// TODO: Stringメソッドを持っている場合には使うようにしたい。以下のような感じ
+// https://play.golang.org/p/UI7Wc1ZCnT3
 func (p *pppInfo) Interface() []interface{} {
 	var pIF []interface{}
 	pIF = append(pIF, p.Code)
@@ -610,11 +619,13 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().In(jst)
 	// 休日データを取得
 	holidayMap := getHolidaysFromSheet(r, sheet)
-	// 前の日が休みの日だったら取得すべきデータがないので起動しない
-	if !isPreviousBussinessday(r, now, holidayMap) {
-		log.Infof(ctx, "Previous day is not business day.")
-		return
-	}
+
+	// TODO: あとでコメント外すか考える
+	// // 前の日が休みの日だったら取得すべきデータがないので起動しない
+	// if !isPreviousBussinessday(r, now, holidayMap) {
+	// 	log.Infof(ctx, "Previous day is not business day.")
+	// 	return
+	// }
 
 	// test環境ではデータの存在する最新の日付に合わせる
 	previousBussinessDay := "2019/05/16"
