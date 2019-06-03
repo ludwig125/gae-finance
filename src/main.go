@@ -142,8 +142,9 @@ type pppInfo struct {
 // 	return toInterfaceSlice(p)
 // }
 
+// 本当は上のように、Interfaceメソッドを使いたい
 // TODO: Stringメソッドを持っている場合には使うようにしたい。以下のような感じ
-// https://play.golang.org/p/UI7Wc1ZCnT3
+// https://play.golang.org/p/Eyl0Pg2-Vtl
 func (p *pppInfo) Interface() []interface{} {
 	var pIF []interface{}
 	pIF = append(pIF, p.Code)
@@ -658,14 +659,21 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	log.Infof(ctx, "codes %v", codes)
 
 	// 移動平均線の並びからPPPの種類を判定
-	// TODO: エラーハンドリングする
 	calcPPP := func(code string) (pppInfo, error) {
-		moving5, _ := getMoving(r, db, code, "moving5", previousBussinessDay)
-		moving20, _ := getMoving(r, db, code, "moving20", previousBussinessDay)
-		moving60, _ := getMoving(r, db, code, "moving60", previousBussinessDay)
-		moving100, _ := getMoving(r, db, code, "moving100", previousBussinessDay)
-		log.Debugf(ctx, "moving %v %v %v %v", moving5, moving20, moving60, moving100)
-		m := movings{moving5, moving20, moving60, moving100}
+		// moving5, _ := getMoving(r, db, code, "moving5", previousBussinessDay)
+		// moving20, _ := getMoving(r, db, code, "moving20", previousBussinessDay)
+		// moving60, _ := getMoving(r, db, code, "moving60", previousBussinessDay)
+		// moving100, _ := getMoving(r, db, code, "moving100", previousBussinessDay)
+		// log.Debugf(ctx, "moving %v %v %v %v", moving5, moving20, moving60, moving100)
+
+		//mo, _ := getMovings(r, db, code, previousBussinessDay)
+		//log.Debugf(ctx, "moving new %v", mo)
+		//m := movings{moving5, moving20, moving60, moving100}
+		//return pppInfo{code, previousBussinessDay, m.calcPPPKind(), m}, nil
+		m, err := getMovings(r, db, code, previousBussinessDay)
+		if err != nil {
+			return pppInfo{}, err
+		}
 		return pppInfo{code, previousBussinessDay, m.calcPPPKind(), m}, nil
 	}
 
@@ -859,6 +867,33 @@ func getMoving(r *http.Request, db *sql.DB, code string, movingDay string, date 
 
 	//log.Infof(ctx, "%f", moving)
 	return moving, nil
+}
+
+// 銘柄コード、日付を渡すと該当のmovings structに対応するX日移動平均を返す
+// TODO：ベタ書きではなくreflectを使ってmovingsの項目が増えても対応できるようにしたい
+func getMovings(r *http.Request, db *sql.DB, code string, date string) (movings, error) {
+	//ctx := appengine.NewContext(r)
+
+	movingDays := []string{"moving5", "moving20", "moving60", "moving100"}
+	ms, err := selectTable(r, db, fmt.Sprintf(
+		"SELECT %s FROM movingavg WHERE code = %s and date = '%s';", strings.Join(movingDays, ","), code, date))
+	if err != nil {
+		return movings{}, fmt.Errorf("failed to selectTable %v", err)
+	}
+	if len(ms) == 0 {
+		return movings{}, fmt.Errorf("no selected data")
+	}
+
+	var mf []float64
+	for _, m := range ms {
+		// []interface型のmsをfloat64に変換
+		f, err := strconv.ParseFloat(m, 64)
+		if err != nil {
+			return movings{}, fmt.Errorf("failed to ParseFloat %v", err)
+		}
+		mf = append(mf, f)
+	}
+	return movings{mf[0], mf[1], mf[2], mf[3]}, nil
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
