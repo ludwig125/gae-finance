@@ -141,3 +141,16 @@ func writeRate(srv *sheets.Service, r *http.Request, rate []codeRate, sid string
 		return
 	}
 }
+
+// SheetのClearとWriteを行う関数
+func clearAndWriteSheet(srv *sheets.Service, sid string, sname string, records [][]interface{}) error {
+	if err := clearSheet(srv, sid, sname); err != nil {
+		return fmt.Errorf("failed to clearSheet. sheetID: %s, sheetName: %s", sid, sname)
+	}
+
+	// writeSheetに渡す
+	if err := writeSheet(srv, sid, sname, records); err != nil {
+		return fmt.Errorf("failed to writeSheet. sheetID: %s, sheetName: %s, error data: [%v]", sid, sname, records)
+	}
+	return nil
+}
