@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -33,32 +34,175 @@ type dateClose struct {
 	Close float64
 }
 
-// type codeDiffRate struct {
-// 	Code             string
-// 	DiffCloseMoving5 float64 // 直近の終値と５日移動平均の差
-// 	IncreasingRate   float64 // 直近の終値のその一つ前の終値との増加率
+// 可変長引数a, b, c...が a > b > cの順番のときにtrue
+// TODO: 型を汎用的にしたい。このコードの置く場所変えたい
+func isAGreaterThanB(params ...float64) bool {
+	max := params[0]
+	for m := 1; m < len(params); m++ {
+		if max > params[m] {
+			max = params[m]
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// 可変長引数a, b, c...が a >= b >= cの順番のときにtrue
+// TODO: 型を汎用的にしたい。このコードの置く場所変えたい
+func isAGreaterThanOrEqualToB(params ...float64) bool {
+	max := params[0]
+	for m := 1; m < len(params); m++ {
+		if max >= params[m] {
+			max = params[m]
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// 任意の構造体を引数にとって、
+// 構造体のフィールドを全てinterface{}型にしてスライスに詰めて返す関数
+// 参考： https://play.golang.org/p/UJ-lrN2Wjfr
+func toInterfaceSlice(v interface{}) []interface{} {
+	var vs []interface{}
+
+	rv := reflect.ValueOf(v)
+	// パラメータvが構造体のポインタのときはElemでポインタの指している先の値を取得する
+	if rv.Kind() == reflect.Ptr {
+		// vが構造体のポインタの時はここを通る
+		rv = reflect.ValueOf(v).Elem()
+	}
+	rt := rv.Type()
+	for i := 0; i < rt.NumField(); i++ {
+		if rv.Field(i).Kind() == reflect.Struct {
+			// フィールドがstructの場合は再帰でinterfaceのSliceを取得して後ろにつなげる
+			sl := toInterfaceSlice(rv.Field(i).Interface())
+			vs = append(vs, sl...)
+		} else {
+			vs = append(vs, rv.Field(i).Interface())
+		}
+	}
+	return vs
+}
+
+// 1: PPP : 5 > 20 > 60 > 100
+// 2: semiPPP : 5 > 20 > 60
+// 3: oppositeSemiPPP : 60 > 20 > 5
+// 4: oppositePPP : 100 > 60 > 20 > 5
+// 0: NON : other
+type pppKind int
+
+const (
+	non pppKind = iota
+	ppp
+	semiPPP
+	oppositeSemiPPP
+	oppositePPP
+)
+
+// constのString変換メソッド
+func (p pppKind) String() string {
+	return [5]string{"non", "ppp", "semiPPP", "oppositeSemiPPP", "oppositePPP"}[p]
+}
+
+type movings struct {
+	Moving5   float64
+	Moving20  float64
+	Moving60  float64
+	Moving100 float64
+}
+
+func (m movings) calcPPPKind() pppKind {
+	// moving5 > moving20 > moving60 > moving100の並びのときPPP
+	if isAGreaterThanB(m.Moving5, m.Moving20, m.Moving60, m.Moving100) {
+		return ppp
+	}
+	if isAGreaterThanB(m.Moving5, m.Moving20, m.Moving60) {
+		return semiPPP
+	}
+	if isAGreaterThanB(m.Moving60, m.Moving20, m.Moving5) {
+		return oppositeSemiPPP
+	}
+	if isAGreaterThanB(m.Moving100, m.Moving60, m.Moving20, m.Moving5) {
+		return oppositePPP
+	}
+	return non
+}
+
+type pppInfo struct {
+	Code    string
+	Date    string
+	PPP     pppKind
+	Movings movings
+}
+
+// func (p *pppInfo) Interface() []interface{} {
+// 	return toInterfaceSlice(p)
 // }
 
-// // codeDiffRateの要素を全てinterfaceにするメソッド
-// func (cdr *codeDiffRate) toInterface() []interface{} {
-// 	var cdrIF []interface{}
-// 	cdrIF = append(cdrIF, cdr.Code)
-// 	cdrIF = append(cdrIF, cdr.DiffCloseMoving5)
-// 	cdrIF = append(cdrIF, cdr.IncreasingRate)
-// 	return cdrIF
+// 本当は上のように、Interfaceメソッドを使いたい
+// TODO: Stringメソッドを持っている場合には使うようにしたい。以下のような感じ
+// https://play.golang.org/p/Eyl0Pg2-Vtl
+func (p *pppInfo) Interface() []interface{} {
+	var pIF []interface{}
+	pIF = append(pIF, p.Code)
+	pIF = append(pIF, p.Date)
+	pIF = append(pIF, p.PPP.String())
+	pIF = append(pIF, p.Movings.Moving5)
+	pIF = append(pIF, p.Movings.Moving20)
+	pIF = append(pIF, p.Movings.Moving60)
+	pIF = append(pIF, p.Movings.Moving100)
+	return pIF
+}
+
+type pppInfos []pppInfo
+
+func (ps *pppInfos) Interface() [][]interface{} {
+	var psi [][]interface{}
+	for _, p := range *ps {
+		psi = append(psi, p.Interface())
+	}
+	return psi
+}
+
+// 前日の終値と前々日の終値が５日移動平均を横切る場合のその増加率
+type kahanshinInfo struct {
+	Code                string  // 銘柄
+	Date                string  // 直近の日付
+	Moving5             float64 // ５日移動平均
+	BeforePreviousClose float64 // 直近のその一つ前の日の終値
+	PreviousClose       float64 // 直近の終値
+	IncreasingRate      float64 // 直近の終値のその一つ前の終値との増加率
+}
+
+// // 要素を全てinterfaceにしたスライスを返すメソッド
+// func (k *kahanshinInfo) Interface() []interface{} {
+// 	var ki []interface{}
+// 	ki = append(ki, k.Code)
+// 	ki = append(ki, k.Date)
+// 	ki = append(ki, k.Moving5)
+// 	ki = append(ki, k.BeforePreviousClose)
+// 	ki = append(ki, k.PreviousClose)
+// 	ki = append(ki, k.IncreasingRate)
+// 	return ki
 // }
 
-// type codeDiffRates []codeDiffRate
+// 要素を全てinterfaceにしたスライスを返すメソッド
+func (k *kahanshinInfo) Interface() []interface{} {
+	return toInterfaceSlice(k)
+}
 
-// // codeDiffRatesを[][]interfaceにするメソッド
-// // SpreadSheetへの書き込みのためにinterface型にする必要がある
-// func (cdrs *codeDiffRates) toInterface() [][]interface{} {
-// 	var cdrsIF [][]interface{}
-// 	for _, cdr := range *cdrs {
-// 		cdrsIF = append(cdrsIF, cdr.toInterface())
-// 	}
-// 	return cdrsIF
-// }
+type kahanshinInfos []kahanshinInfo
+
+func (ks *kahanshinInfos) Interface() [][]interface{} {
+	var ksi [][]interface{}
+	for _, k := range *ks {
+		ksi = append(ksi, k.Interface())
+	}
+	return ksi
+}
 
 // 前日の終値と前々日の終値が５日移動平均を横切る場合のその増加率
 type kahanshinRate struct {
@@ -67,7 +211,7 @@ type kahanshinRate struct {
 }
 
 // 要素を全てinterfaceにしたスライスを返すメソッド
-func (khsr *kahanshinRate) toInterface() []interface{} {
+func (khsr *kahanshinRate) Interface() []interface{} {
 	var khsrIF []interface{}
 	khsrIF = append(khsrIF, khsr.Code)
 	khsrIF = append(khsrIF, khsr.IncreasingRate)
@@ -78,10 +222,10 @@ type kahanshinRates []kahanshinRate
 
 // [][]interfaceにするメソッド
 // SpreadSheetへの書き込みのためにinterface型にする必要がある
-func (khsrs *kahanshinRates) toInterface() [][]interface{} {
+func (khsrs *kahanshinRates) Interface() [][]interface{} {
 	var khsrsIF [][]interface{}
 	for _, khsr := range *khsrs {
-		khsrsIF = append(khsrsIF, khsr.toInterface())
+		khsrsIF = append(khsrsIF, khsr.Interface())
 	}
 	return khsrsIF
 }
@@ -476,11 +620,13 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().In(jst)
 	// 休日データを取得
 	holidayMap := getHolidaysFromSheet(r, sheet)
-	// 前の日が休みの日だったら取得すべきデータがないので起動しない
-	if !isPreviousBussinessday(r, now, holidayMap) {
-		log.Infof(ctx, "Previous day is not business day.")
-		return
-	}
+
+	// TODO: あとでコメント外すか考える
+	// // 前の日が休みの日だったら取得すべきデータがないので起動しない
+	// if !isPreviousBussinessday(r, now, holidayMap) {
+	// 	log.Infof(ctx, "Previous day is not business day.")
+	// 	return
+	// }
 
 	// test環境ではデータの存在する最新の日付に合わせる
 	previousBussinessDay := "2019/05/16"
@@ -497,29 +643,6 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Infof(ctx, "previous BussinessDay %s", previousBussinessDay)
 
-	// 前日の終値と前々日の終値が５日移動平均を横切ったものについてその変動率を返す
-	calcKahanshin := func(code string) (float64, error) {
-		// 前日と前々日の終値を取得
-		dcs, err := getOrderedDateCloses(r, db, code, previousBussinessDay, 2)
-		if err != nil {
-			log.Errorf(ctx, "failed to getOrderedDateCloses. code: %s, err: %v", code, err)
-			return 0.0, err
-		}
-
-		moving5, err := getMoving5(r, db, code, dcs[0].Date)
-		if err != nil {
-			log.Errorf(ctx, "failed to getMoving5. code: %s, err: %v", code, err)
-			return 0.0, err
-		}
-
-		// 陽線または陰線で横切る場合は増加率を返す
-		// 前日終値>５日移動平均>前々日終値 または 前々日終値>５日移動平均>前日終値
-		if (dcs[0].Close >= moving5 && moving5 >= dcs[1].Close) || (dcs[1].Close >= moving5 && moving5 >= dcs[0].Close) {
-			return dcs[0].Close / dcs[1].Close, nil
-		}
-		return 0.0, nil
-	}
-
 	// 最新の日付にある銘柄を取得
 	codes, err := selectTable(r, db,
 		"SELECT code FROM daily WHERE date = (SELECT date FROM daily ORDER BY date DESC LIMIT 1);")
@@ -535,46 +658,152 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	// }
 	log.Infof(ctx, "codes %v", codes)
 
-	khsrs := kahanshinRates{}
+	// 移動平均線の並びからPPPの種類を判定
+	calcPPP := func(code string) (pppInfo, error) {
+		// moving5, _ := getMoving(r, db, code, "moving5", previousBussinessDay)
+		// moving20, _ := getMoving(r, db, code, "moving20", previousBussinessDay)
+		// moving60, _ := getMoving(r, db, code, "moving60", previousBussinessDay)
+		// moving100, _ := getMoving(r, db, code, "moving100", previousBussinessDay)
+		// log.Debugf(ctx, "moving %v %v %v %v", moving5, moving20, moving60, moving100)
+
+		//mo, _ := getMovings(r, db, code, previousBussinessDay)
+		//log.Debugf(ctx, "moving new %v", mo)
+		//m := movings{moving5, moving20, moving60, moving100}
+		//return pppInfo{code, previousBussinessDay, m.calcPPPKind(), m}, nil
+		m, err := getMovings(r, db, code, previousBussinessDay)
+		if err != nil {
+			return pppInfo{}, err
+		}
+		return pppInfo{code, previousBussinessDay, m.calcPPPKind(), m}, nil
+	}
+
+	pppinfos := pppInfos{}
+	for _, code := range codes {
+		p, err := calcPPP(code)
+		if err != nil {
+			log.Errorf(ctx, "failed to calcPPP. code: %s, err: %v", code, err)
+			os.Exit(0)
+		}
+		pppinfos = append(pppinfos, p)
+		//log.Debugf(ctx, "ppp type :%v", p)
+	}
+	// 「前日終値/前々日終値」の増加率が大きい順に並び替え
+	sort.SliceStable(pppinfos, func(i, j int) bool {
+		return pppinfos[i].PPP > pppinfos[j].PPP
+	})
+	//log.Debugf(ctx, "pppinfos :%v", pppinfos)
+	log.Debugf(ctx, "pppinfos :%v %T", pppinfos, pppinfos)
+	// Sheetへ書き込みするために[][]interface{}型に直す
+	pppinfosIF := pppinfos.Interface()
+	log.Debugf(ctx, "pppinfosIF :%v %T", pppinfosIF, pppinfosIF)
+	if err := clearAndWriteSheet(sheet, calcSheetID, "ppp", pppinfosIF); err != nil {
+		log.Errorf(ctx, "failed to clearAndWriteSheet. %v", err)
+		os.Exit(0)
+	}
+	log.Infof(ctx, "succeeded to write PPP")
+
+	// // 前日の終値と前々日の終値が５日移動平均を横切ったものについてその変動率を返す
+	// calcKahanshin := func(code string) (float64, error) {
+	// 	// 前日と前々日の終値を取得
+	// 	dcs, err := getOrderedDateCloses(r, db, code, previousBussinessDay, 2)
+	// 	if err != nil {
+	// 		return 0.0, fmt.Errorf("failed to getOrderedDateCloses. code: %s, err: %v", code, err)
+	// 	}
+
+	// 	movingDay := "moving5"
+	// 	moving5, err := getMoving(r, db, code, movingDay, dcs[0].Date)
+	// 	if err != nil {
+	// 		return 0.0, fmt.Errorf("failed to getMoving. code: %s, moving: %s, err: %v", code, movingDay, err)
+	// 	}
+
+	// 	// 陽線または陰線で横切る場合は増加率を返す
+	// 	// 前日終値>５日移動平均>前々日終値 または 前々日終値>５日移動平均>前日終値
+	// 	if isAGreaterThanOrEqualToB(dcs[0].Close, moving5, dcs[1].Close) || isAGreaterThanOrEqualToB(dcs[1].Close, moving5, dcs[0].Close) {
+	// 		return dcs[0].Close / dcs[1].Close, nil
+	// 	}
+	// 	return 0.0, nil
+	// }
+	// 前日の終値と前々日の終値が５日移動平均を横切ったものについてその変動率を返す
+	calcKahanshin := func(code string) (kahanshinInfo, error) {
+		// 前日と前々日の終値を取得
+		dcs, err := getOrderedDateCloses(r, db, code, previousBussinessDay, 2)
+		if err != nil {
+			return kahanshinInfo{}, fmt.Errorf("failed to getOrderedDateCloses. code: %s, err: %v", code, err)
+		}
+
+		movingDay := "moving5"
+		moving5, err := getMoving(r, db, code, movingDay, dcs[0].Date)
+		if err != nil {
+			return kahanshinInfo{}, fmt.Errorf("failed to getMoving. code: %s, moving: %s, err: %v", code, movingDay, err)
+		}
+
+		// 陽線または陰線で横切る場合は増加率を返す
+		// 前日終値>５日移動平均>前々日終値 または 前々日終値>５日移動平均>前日終値
+		if isAGreaterThanOrEqualToB(dcs[0].Close, moving5, dcs[1].Close) || isAGreaterThanOrEqualToB(dcs[1].Close, moving5, dcs[0].Close) {
+			return kahanshinInfo{code, previousBussinessDay, moving5, dcs[1].Close, dcs[0].Close, dcs[0].Close / dcs[1].Close}, nil
+		}
+		return kahanshinInfo{code, previousBussinessDay, moving5, dcs[1].Close, dcs[0].Close, 0.0}, nil
+	}
+	ks := kahanshinInfos{}
 	for _, code := range codes {
 		k, err := calcKahanshin(code)
 		if err != nil {
 			log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", code, err)
 			os.Exit(0)
 		}
-		if k == 0.0 {
+		if k.IncreasingRate == 0.0 {
 			log.Debugf(ctx, "moving5 is not between closes. code: %s", code)
 			continue
 		}
-		khsrs = append(khsrs, kahanshinRate{Code: code, IncreasingRate: k})
+		ks = append(ks, k)
 	}
-	if len(khsrs) != 0 {
+	if len(ks) != 0 {
 		// 「前日終値/前々日終値」の増加率が大きい順に並び替え
-		sort.SliceStable(khsrs, func(i, j int) bool {
-			return khsrs[i].IncreasingRate > khsrs[j].IncreasingRate
+		sort.SliceStable(ks, func(i, j int) bool {
+			return ks[i].IncreasingRate > ks[j].IncreasingRate
 		})
-
-		// 事前にSheetをclear
-		sheetName := "kahanshin"
-		if err := clearSheet(sheet, calcSheetID, sheetName); err != nil {
-			log.Errorf(ctx, "failed to clearSheet. sheetID: %s, sheetName: %s", calcSheetID, sheetName)
+		// Sheetへ書き込みするために[][]interface{}型に直す
+		ksi := ks.Interface()
+		// log.Debugf(ctx, "ks.Interface(): %v", ks.Interface())
+		// log.Debugf(ctx, "ks.Interface2(): %v", ks.Interface2())
+		if err := clearAndWriteSheet(sheet, calcSheetID, "kahanshin", ksi); err != nil {
+			log.Errorf(ctx, "failed to clearAndWriteSheet. %v", err)
 			os.Exit(0)
 		}
-		log.Infof(ctx, "succeeded to clearSheet. sheetID: %s, sheetName: %s", calcSheetID, sheetName)
-
-		// Sheetへ書き込み
-		// [][]interface{}型に直してwriteSheetに渡す
-		//cdrsIF := cdrs.toInterface()
-		khsrsIF := khsrs.toInterface()
-		if err := writeSheet(sheet, calcSheetID, sheetName, khsrsIF); err != nil {
-			log.Errorf(ctx, "failed to writeSheet. sheetID: %s, sheetName: %s", calcSheetID, sheetName)
-			log.Infof(ctx, "error data: %v", khsrsIF)
-			os.Exit(0)
-		}
-		log.Infof(ctx, "succeeded to writeSheet. sheetID: %s, sheetName: %s", calcSheetID, sheetName)
+		log.Infof(ctx, "succeeded to write kahanshin")
 	} else {
 		log.Infof(ctx, "no data kahanshin")
 	}
+
+	// khsrs := kahanshinRates{}
+	// for _, code := range codes {
+	// 	k, err := calcKahanshin(code)
+	// 	if err != nil {
+	// 		log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", code, err)
+	// 		os.Exit(0)
+	// 	}
+	// 	if k == 0.0 {
+	// 		log.Debugf(ctx, "moving5 is not between closes. code: %s", code)
+	// 		continue
+	// 	}
+	// 	khsrs = append(khsrs, kahanshinRate{Code: code, IncreasingRate: k})
+	// }
+	// if len(khsrs) != 0 {
+	// 	// 「前日終値/前々日終値」の増加率が大きい順に並び替え
+	// 	sort.SliceStable(khsrs, func(i, j int) bool {
+	// 		return khsrs[i].IncreasingRate > khsrs[j].IncreasingRate
+	// 	})
+	// 	// Sheetへ書き込みするために[][]interface{}型に直す
+	// 	khsrsIF := khsrs.Interface()
+	// 	if err := clearAndWriteSheet(sheet, calcSheetID, "kahanshin", khsrsIF); err != nil {
+	// 		log.Errorf(ctx, "failed to clearAndWriteSheet. %v", err)
+	// 		os.Exit(0)
+	// 	}
+	// 	log.Infof(ctx, "succeeded to write kahanshin")
+	// } else {
+	// 	log.Infof(ctx, "no data kahanshin")
+	// }
+
 	log.Infof(ctx, "done calcHandler.")
 }
 
@@ -620,12 +849,12 @@ func getOrderedDateCloses(r *http.Request, db *sql.DB, code string, latestDate s
 	return dateCloses, nil
 }
 
-// 銘柄コードと日付を渡すと該当の５日移動平均を返す
-func getMoving5(r *http.Request, db *sql.DB, code string, date string) (float64, error) {
+// 銘柄コード、必要な移動平均、日付を渡すと該当のX日移動平均を返す
+func getMoving(r *http.Request, db *sql.DB, code string, movingDay string, date string) (float64, error) {
 	//ctx := appengine.NewContext(r)
 
 	dbRet, err := selectTable(r, db, fmt.Sprintf(
-		"SELECT moving5 FROM movingavg WHERE code = %s and date = '%s';", code, date))
+		"SELECT %s FROM movingavg WHERE code = %s and date = '%s';", movingDay, code, date))
 	if err != nil {
 		return 0.0, fmt.Errorf("failed to selectTable %v", err)
 	}
@@ -634,10 +863,37 @@ func getMoving5(r *http.Request, db *sql.DB, code string, date string) (float64,
 	}
 
 	// []interface {}型のdbRetをfloat64に変換
-	moving5, _ := strconv.ParseFloat(dbRet[0], 64)
+	moving, _ := strconv.ParseFloat(dbRet[0], 64)
 
-	//log.Infof(ctx, "%f", moving5)
-	return moving5, nil
+	//log.Infof(ctx, "%f", moving)
+	return moving, nil
+}
+
+// 銘柄コード、日付を渡すと該当のmovings structに対応するX日移動平均を返す
+// TODO：ベタ書きではなくreflectを使ってmovingsの項目が増えても対応できるようにしたい
+func getMovings(r *http.Request, db *sql.DB, code string, date string) (movings, error) {
+	//ctx := appengine.NewContext(r)
+
+	movingDays := []string{"moving5", "moving20", "moving60", "moving100"}
+	ms, err := selectTable(r, db, fmt.Sprintf(
+		"SELECT %s FROM movingavg WHERE code = %s and date = '%s';", strings.Join(movingDays, ","), code, date))
+	if err != nil {
+		return movings{}, fmt.Errorf("failed to selectTable %v", err)
+	}
+	if len(ms) == 0 {
+		return movings{}, fmt.Errorf("no selected data")
+	}
+
+	var mf []float64
+	for _, m := range ms {
+		// []interface型のmsをfloat64に変換
+		f, err := strconv.ParseFloat(m, 64)
+		if err != nil {
+			return movings{}, fmt.Errorf("failed to ParseFloat %v", err)
+		}
+		mf = append(mf, f)
+	}
+	return movings{mf[0], mf[1], mf[2], mf[3]}, nil
 }
 
 func indexHandler(w http.ResponseWriter, r *http.Request) {
