@@ -62,8 +62,9 @@ func isAGreaterThanOrEqualToB(params ...float64) bool {
 	return true
 }
 
-// 任意の構造体を引数にとって、
+// 任意の構造体、または構造体のポインタを引数にとって、
 // 構造体のフィールドを全てinterface{}型にしてスライスに詰めて返す関数
+// 構造体の中に構造体があっても対応できる
 // 参考： https://play.golang.org/p/UJ-lrN2Wjfr
 func toInterfaceSlice(v interface{}) []interface{} {
 	var vs []interface{}
@@ -81,7 +82,14 @@ func toInterfaceSlice(v interface{}) []interface{} {
 			sl := toInterfaceSlice(rv.Field(i).Interface())
 			vs = append(vs, sl...)
 		} else {
-			vs = append(vs, rv.Field(i).Interface())
+			// フィールドがStringメソッドを持っていたらそれを使う
+			f := rv.Field(i).MethodByName("String")
+			// Stringメソッドを持っている場合はfの種別がFuncになる
+			if f.Kind() == reflect.Func {
+				vs = append(vs, f.Call(nil)[0].Interface())
+			} else {
+				vs = append(vs, rv.Field(i).Interface())
+			}
 		}
 	}
 	return vs
@@ -138,24 +146,24 @@ type pppInfo struct {
 	Movings movings
 }
 
-// func (p *pppInfo) Interface() []interface{} {
-// 	return toInterfaceSlice(p)
-// }
-
-// 本当は上のように、Interfaceメソッドを使いたい
-// TODO: Stringメソッドを持っている場合には使うようにしたい。以下のような感じ
-// https://play.golang.org/p/Eyl0Pg2-Vtl
 func (p *pppInfo) Interface() []interface{} {
-	var pIF []interface{}
-	pIF = append(pIF, p.Code)
-	pIF = append(pIF, p.Date)
-	pIF = append(pIF, p.PPP.String())
-	pIF = append(pIF, p.Movings.Moving5)
-	pIF = append(pIF, p.Movings.Moving20)
-	pIF = append(pIF, p.Movings.Moving60)
-	pIF = append(pIF, p.Movings.Moving100)
-	return pIF
+	return toInterfaceSlice(p)
 }
+
+// // 本当は上のように、Interfaceメソッドを使いたい
+// // TODO: Stringメソッドを持っている場合には使うようにしたい。以下のような感じ
+// // https://play.golang.org/p/Eyl0Pg2-Vtl
+// func (p *pppInfo) Interface() []interface{} {
+// 	var pIF []interface{}
+// 	pIF = append(pIF, p.Code)
+// 	pIF = append(pIF, p.Date)
+// 	pIF = append(pIF, p.PPP.String())
+// 	pIF = append(pIF, p.Movings.Moving5)
+// 	pIF = append(pIF, p.Movings.Moving20)
+// 	pIF = append(pIF, p.Movings.Moving60)
+// 	pIF = append(pIF, p.Movings.Moving100)
+// 	return pIF
+// }
 
 type pppInfos []pppInfo
 
@@ -687,42 +695,21 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		pppinfos = append(pppinfos, p)
 		//log.Debugf(ctx, "ppp type :%v", p)
 	}
-	// 「前日終値/前々日終値」の増加率が大きい順に並び替え
+	// pppKindの定義順に並び替え
 	sort.SliceStable(pppinfos, func(i, j int) bool {
 		return pppinfos[i].PPP > pppinfos[j].PPP
 	})
 	//log.Debugf(ctx, "pppinfos :%v", pppinfos)
-	log.Debugf(ctx, "pppinfos :%v %T", pppinfos, pppinfos)
+	//log.Debugf(ctx, "pppinfos :%v %T", pppinfos, pppinfos)
 	// Sheetへ書き込みするために[][]interface{}型に直す
 	pppinfosIF := pppinfos.Interface()
-	log.Debugf(ctx, "pppinfosIF :%v %T", pppinfosIF, pppinfosIF)
+	//log.Debugf(ctx, "pppinfosIF :%v %T", pppinfosIF, pppinfosIF)
 	if err := clearAndWriteSheet(sheet, calcSheetID, "ppp", pppinfosIF); err != nil {
 		log.Errorf(ctx, "failed to clearAndWriteSheet. %v", err)
 		os.Exit(0)
 	}
 	log.Infof(ctx, "succeeded to write PPP")
 
-	// // 前日の終値と前々日の終値が５日移動平均を横切ったものについてその変動率を返す
-	// calcKahanshin := func(code string) (float64, error) {
-	// 	// 前日と前々日の終値を取得
-	// 	dcs, err := getOrderedDateCloses(r, db, code, previousBussinessDay, 2)
-	// 	if err != nil {
-	// 		return 0.0, fmt.Errorf("failed to getOrderedDateCloses. code: %s, err: %v", code, err)
-	// 	}
-
-	// 	movingDay := "moving5"
-	// 	moving5, err := getMoving(r, db, code, movingDay, dcs[0].Date)
-	// 	if err != nil {
-	// 		return 0.0, fmt.Errorf("failed to getMoving. code: %s, moving: %s, err: %v", code, movingDay, err)
-	// 	}
-
-	// 	// 陽線または陰線で横切る場合は増加率を返す
-	// 	// 前日終値>５日移動平均>前々日終値 または 前々日終値>５日移動平均>前日終値
-	// 	if isAGreaterThanOrEqualToB(dcs[0].Close, moving5, dcs[1].Close) || isAGreaterThanOrEqualToB(dcs[1].Close, moving5, dcs[0].Close) {
-	// 		return dcs[0].Close / dcs[1].Close, nil
-	// 	}
-	// 	return 0.0, nil
-	// }
 	// 前日の終値と前々日の終値が５日移動平均を横切ったものについてその変動率を返す
 	calcKahanshin := func(code string) (kahanshinInfo, error) {
 		// 前日と前々日の終値を取得
