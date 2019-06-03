@@ -86,6 +86,7 @@ func toInterfaceSlice(v interface{}) []interface{} {
 			f := rv.Field(i).MethodByName("String")
 			// Stringメソッドを持っている場合はfの種別がFuncになる
 			if f.Kind() == reflect.Func {
+				// Stringメソッドを使う
 				vs = append(vs, f.Call(nil)[0].Interface())
 			} else {
 				vs = append(vs, rv.Field(i).Interface())
@@ -212,31 +213,9 @@ func (ks *kahanshinInfos) Interface() [][]interface{} {
 	return ksi
 }
 
-// 前日の終値と前々日の終値が５日移動平均を横切る場合のその増加率
-type kahanshinRate struct {
-	Code           string
-	IncreasingRate float64 // 直近の終値のその一つ前の終値との増加率
-}
-
-// 要素を全てinterfaceにしたスライスを返すメソッド
-func (khsr *kahanshinRate) Interface() []interface{} {
-	var khsrIF []interface{}
-	khsrIF = append(khsrIF, khsr.Code)
-	khsrIF = append(khsrIF, khsr.IncreasingRate)
-	return khsrIF
-}
-
-type kahanshinRates []kahanshinRate
-
-// [][]interfaceにするメソッド
-// SpreadSheetへの書き込みのためにinterface型にする必要がある
-func (khsrs *kahanshinRates) Interface() [][]interface{} {
-	var khsrsIF [][]interface{}
-	for _, khsr := range *khsrs {
-		khsrsIF = append(khsrsIF, khsr.Interface())
-	}
-	return khsrsIF
-}
+// type marketPriceInfo struct {
+// 	Code
+// }
 
 func main() {
 	// TODO: Handerごとに開始と終了のログを出して、実行時間も表示する
@@ -761,35 +740,6 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Infof(ctx, "no data kahanshin")
 	}
-
-	// khsrs := kahanshinRates{}
-	// for _, code := range codes {
-	// 	k, err := calcKahanshin(code)
-	// 	if err != nil {
-	// 		log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", code, err)
-	// 		os.Exit(0)
-	// 	}
-	// 	if k == 0.0 {
-	// 		log.Debugf(ctx, "moving5 is not between closes. code: %s", code)
-	// 		continue
-	// 	}
-	// 	khsrs = append(khsrs, kahanshinRate{Code: code, IncreasingRate: k})
-	// }
-	// if len(khsrs) != 0 {
-	// 	// 「前日終値/前々日終値」の増加率が大きい順に並び替え
-	// 	sort.SliceStable(khsrs, func(i, j int) bool {
-	// 		return khsrs[i].IncreasingRate > khsrs[j].IncreasingRate
-	// 	})
-	// 	// Sheetへ書き込みするために[][]interface{}型に直す
-	// 	khsrsIF := khsrs.Interface()
-	// 	if err := clearAndWriteSheet(sheet, calcSheetID, "kahanshin", khsrsIF); err != nil {
-	// 		log.Errorf(ctx, "failed to clearAndWriteSheet. %v", err)
-	// 		os.Exit(0)
-	// 	}
-	// 	log.Infof(ctx, "succeeded to write kahanshin")
-	// } else {
-	// 	log.Infof(ctx, "no data kahanshin")
-	// }
 
 	log.Infof(ctx, "done calcHandler.")
 }
