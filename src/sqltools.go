@@ -103,6 +103,8 @@ func showDatabases(w http.ResponseWriter, db *sql.DB) {
 	w.Write(buf.Bytes())
 }
 
+// TODO: 以下のようなことがあったのでRetry入れる
+// failed to calcKahanshin. code: 5471, err: failed to getOrderedDateCloses. code: 5471, err: failed to selectTable failed to select. query: [SELECT date, close FROM daily WHERE code = 5471 AND date <= '2019/06/03' ORDER BY date DESC LIMIT 2;], err: invalid connection
 func selectTable(r *http.Request, db *sql.DB, q string) ([]string, error) {
 	ctx := appengine.NewContext(r)
 	log.Infof(ctx, "select query: %s", q)
