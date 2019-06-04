@@ -167,15 +167,15 @@ func (p *pppInfo) Interface() []interface{} {
 // }
 
 // pppInfos使わなくなった
-type pppInfos []pppInfo
+// type pppInfos []pppInfo
 
-func (ps *pppInfos) Interface() [][]interface{} {
-	var psi [][]interface{}
-	for _, p := range *ps {
-		psi = append(psi, p.Interface())
-	}
-	return psi
-}
+// func (ps *pppInfos) Interface() [][]interface{} {
+// 	var psi [][]interface{}
+// 	for _, p := range *ps {
+// 		psi = append(psi, p.Interface())
+// 	}
+// 	return psi
+// }
 
 // 前日の終値と前々日の終値が５日移動平均を横切る場合のその増加率
 type kahanshinInfo struct {
@@ -205,15 +205,15 @@ func (k *kahanshinInfo) Interface() []interface{} {
 }
 
 // kahanshinInfos使わなくなった
-type kahanshinInfos []kahanshinInfo
+// type kahanshinInfos []kahanshinInfo
 
-func (ks *kahanshinInfos) Interface() [][]interface{} {
-	var ksi [][]interface{}
-	for _, k := range *ks {
-		ksi = append(ksi, k.Interface())
-	}
-	return ksi
-}
+// func (ks *kahanshinInfos) Interface() [][]interface{} {
+// 	var ksi [][]interface{}
+// 	for _, k := range *ks {
+// 		ksi = append(ksi, k.Interface())
+// 	}
+// 	return ksi
+// }
 
 type marketInfo struct {
 	Code          string // 銘柄
@@ -764,6 +764,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 			// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
 			continue
 		}
+		log.Infof(ctx, "succeeded to calcPPP. code: %s", code)
 
 		k, err := calcKahanshin(code, p.Movings.Moving5)
 		if err != nil {
@@ -771,6 +772,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 			// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
 			continue
 		}
+		log.Infof(ctx, "succeeded to calcKahanshin. code: %s", code)
 		// TODO: どうするかあとで考える
 		// if k.IncreasingRate == 0.0 {
 		// 	log.Debugf(ctx, "moving5 is not between closes. code: %s", code)
@@ -792,11 +794,12 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	// Sheetへ書き込みするために[][]interface{}型に直す
 	misi := mis.Interface()
 	//log.Debugf(ctx, "pppinfosIF :%v %T", pppinfosIF, pppinfosIF)
+	log.Infof(ctx, "trying to write sheet")
 	if err := clearAndWriteSheet(sheet, calcSheetID, "market", misi); err != nil {
 		log.Errorf(ctx, "failed to clearAndWriteSheet. %v", err)
 		os.Exit(0)
 	}
-	log.Infof(ctx, "succeeded to write market")
+	log.Infof(ctx, "succeeded to write sheet")
 
 	log.Infof(ctx, "done calcHandler.")
 }
