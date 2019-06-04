@@ -213,9 +213,17 @@ func (ks *kahanshinInfos) Interface() [][]interface{} {
 	return ksi
 }
 
-// type marketPriceInfo struct {
-// 	Code
-// }
+type marketPriceInfo struct {
+	Code          string // 銘柄
+	Date          string // 直近の日付
+	PPPInfo       pppInfo
+	KahanshinInfo kahanshinInfo
+}
+
+// 要素を全てinterfaceにしたスライスを返すメソッド
+func (m *marketPriceInfo) Interface() []interface{} {
+	return toInterfaceSlice(m)
+}
 
 func main() {
 	// TODO: Handerごとに開始と終了のログを出して、実行時間も表示する
@@ -680,6 +688,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	})
 	//log.Debugf(ctx, "pppinfos :%v", pppinfos)
 	//log.Debugf(ctx, "pppinfos :%v %T", pppinfos, pppinfos)
+
 	// Sheetへ書き込みするために[][]interface{}型に直す
 	pppinfosIF := pppinfos.Interface()
 	//log.Debugf(ctx, "pppinfosIF :%v %T", pppinfosIF, pppinfosIF)
