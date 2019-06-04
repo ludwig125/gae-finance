@@ -682,7 +682,8 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		p, err := calcPPP(code)
 		if err != nil {
 			log.Errorf(ctx, "failed to calcPPP. code: %s, err: %v", code, err)
-			os.Exit(0)
+			// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
+			continue
 		}
 		pppinfos = append(pppinfos, p)
 		//log.Debugf(ctx, "ppp type :%v", p)
@@ -749,7 +750,8 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		k, err := calcKahanshin(code)
 		if err != nil {
 			log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", code, err)
-			os.Exit(0)
+			// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
+			continue
 		}
 		if k.IncreasingRate == 0.0 {
 			log.Debugf(ctx, "moving5 is not between closes. code: %s", code)
