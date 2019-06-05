@@ -131,11 +131,12 @@ func (m movings) calcPPPKind() pppKind {
 	if isAGreaterThanB(m.Moving5, m.Moving20, m.Moving60) {
 		return semiPPP
 	}
-	if isAGreaterThanB(m.Moving60, m.Moving20, m.Moving5) {
-		return oppositeSemiPPP
-	}
+	// 条件の厳しい順にしないとゆるい方(oppositeSemiPPP)に先に適合してしまうので注意
 	if isAGreaterThanB(m.Moving100, m.Moving60, m.Moving20, m.Moving5) {
 		return oppositePPP
+	}
+	if isAGreaterThanB(m.Moving60, m.Moving20, m.Moving5) {
+		return oppositeSemiPPP
 	}
 	return non
 }
