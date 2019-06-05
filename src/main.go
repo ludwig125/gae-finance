@@ -117,7 +117,7 @@ func (p pppKind) String() string {
 }
 
 type movings struct {
-	Moving5   float64
+	Moving5   float64 // ５日移動平均
 	Moving20  float64
 	Moving60  float64
 	Moving100 float64
@@ -141,8 +141,6 @@ func (m movings) calcPPPKind() pppKind {
 }
 
 type pppInfo struct {
-	// Code    string
-	// Date    string
 	PPP     pppKind
 	Movings movings
 }
@@ -153,9 +151,6 @@ func (p *pppInfo) Interface() []interface{} {
 
 // 前日の終値と前々日の終値が５日移動平均を横切る場合のその増加率
 type kahanshinInfo struct {
-	// Code                string  // 銘柄
-	// Date                string  // 直近の日付
-	// Moving5             float64 // ５日移動平均
 	BeforePreviousClose float64 // 直近のその一つ前の日の終値
 	PreviousClose       float64 // 直近の終値
 	IncreasingRate      float64 // 直近の終値のその一つ前の終値との増加率
