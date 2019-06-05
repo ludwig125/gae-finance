@@ -616,6 +616,16 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		return pppInfo{m.calcPPPKind(), m}, nil
 	}
 
+	calcPPPChan := func(code string) (chan pppInfo, error) {
+		pppInfoChan := make(chan pppInfo)
+		go func() {
+			m, _ := getMovings(r, db, code, previousBussinessDay)
+			// TODO: error handling
+			pppInfoChan <- pppInfo{m.calcPPPKind(), m}
+		}()
+		return pppInfoChan, nil
+	}
+
 	// 前日の終値と前々日の終値が５日移動平均を横切ったものについてその変動率を返す
 	calcKahanshin := func(code string, moving5 float64) (kahanshinInfo, error) {
 		// 前日と前々日の終値を取得
@@ -640,6 +650,13 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 			// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
 			continue
 		}
+		log.Debugf(ctx, "calcPPP %v. code: %s", p, code)
+		pc, err := calcPPPChan(code)
+		if err != nil {
+			log.Errorf(ctx, "failed to calcPPPChan. code: %s, err: %v", code, err)
+		}
+		log.Debugf(ctx, "calcPPPChan %v. code: %s", <-pc, code)
+
 		log.Infof(ctx, "succeeded to calcPPP. code: %s", code)
 
 		k, err := calcKahanshin(code, p.Movings.Moving5)
