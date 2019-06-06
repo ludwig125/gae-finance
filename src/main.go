@@ -554,6 +554,7 @@ func movingAverage(r *http.Request, dcs []dateClose, avgDays int) map[string]flo
 }
 
 func calcHandler(w http.ResponseWriter, r *http.Request) {
+	processStartTime := time.Now().UTC()
 	// GAE log
 	ctx := appengine.NewContext(r)
 
@@ -650,7 +651,6 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		return kahanshinInfo{dcs[1].Close, dcs[0].Close, 0.0}, nil
 	}
 
-	nowTime := time.Now().UTC()
 	mis := marketInfos{}
 	for _, code := range codes {
 		// p, err := calcPPP(code)
@@ -696,7 +696,6 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		mi := marketInfo{Code: code, Date: previousBussinessDay, PPPInfo: pRes.PPPInfo, KahanshinInfo: k}
 		mis = append(mis, mi)
 	}
-	log.Infof(ctx, "Elapsed time %v", time.Since(nowTime))
 	// 「前日終値/前々日終値」の増加率が大きい順に並び替え
 	sort.SliceStable(mis, func(i, j int) bool {
 		return mis[i].KahanshinInfo.IncreasingRate > mis[j].KahanshinInfo.IncreasingRate
@@ -715,7 +714,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Infof(ctx, "succeeded to write sheet")
 
-	log.Infof(ctx, "done calcHandler.")
+	log.Infof(ctx, "done calcHandler. Elapsed time %v.", time.Since(processStartTime))
 }
 
 // codeと取得する件数と検索する日付を与えると、
