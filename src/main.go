@@ -554,6 +554,7 @@ func movingAverage(r *http.Request, dcs []dateClose, avgDays int) map[string]flo
 }
 
 func calcHandler(w http.ResponseWriter, r *http.Request) {
+	processStartTime := time.Now().UTC()
 	// GAE log
 	ctx := appengine.NewContext(r)
 
@@ -608,12 +609,30 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	log.Infof(ctx, "codes %v", codes)
 
 	// 移動平均線の並びからPPPの種類を判定
-	calcPPP := func(code string) (pppInfo, error) {
-		m, err := getMovings(r, db, code, previousBussinessDay)
-		if err != nil {
-			return pppInfo{}, err
-		}
-		return pppInfo{m.calcPPPKind(), m}, nil
+	// calcPPP := func(code string) (pppInfo, error) {
+	// 	m, err := getMovings(r, db, code, previousBussinessDay)
+	// 	if err != nil {
+	// 		return pppInfo{}, err
+	// 	}
+	// 	return pppInfo{m.calcPPPKind(), m}, nil
+	// }
+
+	type pppResult struct {
+		Error   error
+		PPPInfo pppInfo
+	}
+	calcPPP := func(done <-chan interface{}, code string) chan pppResult {
+		pppResultChan := make(chan pppResult)
+		go func() {
+			defer close(pppResultChan)
+			m, err := getMovings(r, db, code, previousBussinessDay)
+			select {
+			case <-done:
+				return
+			case pppResultChan <- pppResult{Error: err, PPPInfo: pppInfo{m.calcPPPKind(), m}}:
+			}
+		}()
+		return pppResultChan
 	}
 
 	// 前日の終値と前々日の終値が５日移動平均を横切ったものについてその変動率を返す
@@ -634,15 +653,33 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 
 	mis := marketInfos{}
 	for _, code := range codes {
-		p, err := calcPPP(code)
-		if err != nil {
-			log.Errorf(ctx, "failed to calcPPP. code: %s, err: %v", code, err)
-			// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
+		// p, err := calcPPP(code)
+		// if err != nil {
+		// 	log.Errorf(ctx, "failed to calcPPP. code: %s, err: %v", code, err)
+		// 	// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
+		// 	continue
+		// }
+
+		// log.Infof(ctx, "succeeded to calcPPP. code: %s", code)
+
+		// k, err := calcKahanshin(code, p.Movings.Moving5)
+		// if err != nil {
+		// 	log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", code, err)
+		// 	// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
+		// 	continue
+		// }
+		// log.Debugf(ctx, "calcKahanshin %v. code: %s", k, code)
+
+		doneCalcPPP := make(chan interface{})
+		defer close(doneCalcPPP)
+		p := calcPPP(doneCalcPPP, code)
+		pRes := <-p
+		if pRes.Error != nil {
+			log.Errorf(ctx, "failed to calcPPP. code: %s, err: %v", code, pRes.Error)
 			continue
 		}
 		log.Infof(ctx, "succeeded to calcPPP. code: %s", code)
-
-		k, err := calcKahanshin(code, p.Movings.Moving5)
+		k, err := calcKahanshin(code, pRes.PPPInfo.Movings.Moving5)
 		if err != nil {
 			log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", code, err)
 			// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
@@ -650,11 +687,13 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Infof(ctx, "succeeded to calcKahanshin. code: %s", code)
 		// TODO: どうするかあとで考える
-		// if k.IncreasingRate == 0.0 {
-		// 	log.Debugf(ctx, "moving5 is not between closes. code: %s", code)
-		// 	continue
-		// }
-		mi := marketInfo{Code: code, Date: previousBussinessDay, PPPInfo: p, KahanshinInfo: k}
+		// 	if k.IncreasingRate == 0.0 {
+		// 		log.Debugf(ctx, "moving5 is not between closes. code: %s", code)
+		// 		continue
+		// 	}
+
+		//mi := marketInfo{Code: code, Date: previousBussinessDay, PPPInfo: p, KahanshinInfo: k}
+		mi := marketInfo{Code: code, Date: previousBussinessDay, PPPInfo: pRes.PPPInfo, KahanshinInfo: k}
 		mis = append(mis, mi)
 	}
 	// 「前日終値/前々日終値」の増加率が大きい順に並び替え
@@ -675,7 +714,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Infof(ctx, "succeeded to write sheet")
 
-	log.Infof(ctx, "done calcHandler.")
+	log.Infof(ctx, "done calcHandler. Elapsed time %v.", time.Since(processStartTime))
 }
 
 // codeと取得する件数と検索する日付を与えると、
