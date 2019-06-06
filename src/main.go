@@ -608,17 +608,18 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	log.Infof(ctx, "codes %v", codes)
 
 	// 移動平均線の並びからPPPの種類を判定
-	calcPPP := func(code string) (pppInfo, error) {
-		m, err := getMovings(r, db, code, previousBussinessDay)
-		if err != nil {
-			return pppInfo{}, err
-		}
-		return pppInfo{m.calcPPPKind(), m}, nil
-	}
+	// calcPPP := func(code string) (pppInfo, error) {
+	// 	m, err := getMovings(r, db, code, previousBussinessDay)
+	// 	if err != nil {
+	// 		return pppInfo{}, err
+	// 	}
+	// 	return pppInfo{m.calcPPPKind(), m}, nil
+	// }
 
 	calcPPPChan := func(code string) (chan pppInfo, error) {
 		pppInfoChan := make(chan pppInfo)
 		go func() {
+			defer close(pppInfoChan)
 			m, _ := getMovings(r, db, code, previousBussinessDay)
 			// TODO: error handling
 			pppInfoChan <- pppInfo{m.calcPPPKind(), m}
@@ -642,38 +643,49 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		return kahanshinInfo{dcs[1].Close, dcs[0].Close, 0.0}, nil
 	}
 
+	nowTime := time.Now().UTC()
 	mis := marketInfos{}
 	for _, code := range codes {
-		p, err := calcPPP(code)
-		if err != nil {
-			log.Errorf(ctx, "failed to calcPPP. code: %s, err: %v", code, err)
-			// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
-			continue
-		}
-		log.Debugf(ctx, "calcPPP %v. code: %s", p, code)
+		// p, err := calcPPP(code)
+		// if err != nil {
+		// 	log.Errorf(ctx, "failed to calcPPP. code: %s, err: %v", code, err)
+		// 	// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
+		// 	continue
+		// }
+
+		// log.Infof(ctx, "succeeded to calcPPP. code: %s", code)
+
+		// k, err := calcKahanshin(code, p.Movings.Moving5)
+		// if err != nil {
+		// 	log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", code, err)
+		// 	// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
+		// 	continue
+		// }
+		// log.Debugf(ctx, "calcKahanshin %v. code: %s", k, code)
+
 		pc, err := calcPPPChan(code)
 		if err != nil {
 			log.Errorf(ctx, "failed to calcPPPChan. code: %s, err: %v", code, err)
 		}
-		log.Debugf(ctx, "calcPPPChan %v. code: %s", <-pc, code)
-
-		log.Infof(ctx, "succeeded to calcPPP. code: %s", code)
-
-		k, err := calcKahanshin(code, p.Movings.Moving5)
+		pcContent := <-pc
+		k, err := calcKahanshin(code, pcContent.Movings.Moving5)
 		if err != nil {
-			log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", code, err)
+			log.Errorf(ctx, "failed to calcKahanshinChan. code: %s, err: %v", code, err)
 			// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
 			continue
 		}
 		log.Infof(ctx, "succeeded to calcKahanshin. code: %s", code)
 		// TODO: どうするかあとで考える
-		// if k.IncreasingRate == 0.0 {
-		// 	log.Debugf(ctx, "moving5 is not between closes. code: %s", code)
-		// 	continue
-		// }
-		mi := marketInfo{Code: code, Date: previousBussinessDay, PPPInfo: p, KahanshinInfo: k}
+		// 	if k.IncreasingRate == 0.0 {
+		// 		log.Debugf(ctx, "moving5 is not between closes. code: %s", code)
+		// 		continue
+		// 	}
+
+		//mi := marketInfo{Code: code, Date: previousBussinessDay, PPPInfo: p, KahanshinInfo: k}
+		mi := marketInfo{Code: code, Date: previousBussinessDay, PPPInfo: pcContent, KahanshinInfo: k}
 		mis = append(mis, mi)
 	}
+	log.Infof(ctx, "Elapsed time %v", time.Since(nowTime))
 	// 「前日終値/前々日終値」の増加率が大きい順に並び替え
 	sort.SliceStable(mis, func(i, j int) bool {
 		return mis[i].KahanshinInfo.IncreasingRate > mis[j].KahanshinInfo.IncreasingRate
