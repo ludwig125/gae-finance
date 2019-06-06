@@ -616,15 +616,24 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	// 	return pppInfo{m.calcPPPKind(), m}, nil
 	// }
 
-	calcPPPChan := func(code string) (chan pppInfo, error) {
-		pppInfoChan := make(chan pppInfo)
+	type pppResult struct {
+		Error   error
+		PPPInfo pppInfo
+	}
+	calcPPPChan := func(done <-chan interface{}, code string) chan pppResult {
+		pppResultChan := make(chan pppResult)
 		go func() {
-			defer close(pppInfoChan)
-			m, _ := getMovings(r, db, code, previousBussinessDay)
+			defer close(pppResultChan)
+			m, err := getMovings(r, db, code, previousBussinessDay)
 			// TODO: error handling
-			pppInfoChan <- pppInfo{m.calcPPPKind(), m}
+
+			select {
+			case <-done:
+				return
+			case pppResultChan <- pppResult{Error: err, PPPInfo: pppInfo{m.calcPPPKind(), m}}:
+			}
 		}()
-		return pppInfoChan, nil
+		return pppResultChan
 	}
 
 	// 前日の終値と前々日の終値が５日移動平均を横切ったものについてその変動率を返す
@@ -663,12 +672,16 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		// }
 		// log.Debugf(ctx, "calcKahanshin %v. code: %s", k, code)
 
-		pc, err := calcPPPChan(code)
-		if err != nil {
-			log.Errorf(ctx, "failed to calcPPPChan. code: %s, err: %v", code, err)
+		doneCalcPPP := make(chan interface{})
+		defer close(doneCalcPPP)
+		p := calcPPPChan(doneCalcPPP, code)
+		pRes := <-p
+		if pRes.Error != nil {
+			log.Errorf(ctx, "failed to calcPPPChan. code: %s, err: %v", code, pRes.Error)
+			continue
 		}
-		pcContent := <-pc
-		k, err := calcKahanshin(code, pcContent.Movings.Moving5)
+		log.Infof(ctx, "succeeded to calcPPPChan. code: %s", code)
+		k, err := calcKahanshin(code, pRes.PPPInfo.Movings.Moving5)
 		if err != nil {
 			log.Errorf(ctx, "failed to calcKahanshinChan. code: %s, err: %v", code, err)
 			// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
@@ -682,7 +695,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		// 	}
 
 		//mi := marketInfo{Code: code, Date: previousBussinessDay, PPPInfo: p, KahanshinInfo: k}
-		mi := marketInfo{Code: code, Date: previousBussinessDay, PPPInfo: pcContent, KahanshinInfo: k}
+		mi := marketInfo{Code: code, Date: previousBussinessDay, PPPInfo: pRes.PPPInfo, KahanshinInfo: k}
 		mis = append(mis, mi)
 	}
 	log.Infof(ctx, "Elapsed time %v", time.Since(nowTime))
