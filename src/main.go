@@ -625,8 +625,6 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			defer close(pppResultChan)
 			m, err := getMovings(r, db, code, previousBussinessDay)
-			// TODO: error handling
-
 			select {
 			case <-done:
 				return
