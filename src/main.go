@@ -681,7 +681,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		log.Infof(ctx, "succeeded to calcPPP. code: %s", code)
 		k, err := calcKahanshin(code, pRes.PPPInfo.Movings.Moving5)
 		if err != nil {
-			log.Errorf(ctx, "failed to calcKahanshinChan. code: %s, err: %v", code, err)
+			log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", code, err)
 			// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
 			continue
 		}
