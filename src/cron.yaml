@@ -19,13 +19,13 @@ cron:
 #  timezone: Asia/Tokyo
 - description: "ensure daily data in DB"
   url: /ensure_daily
-  schedule: every day 02:45
+  schedule: every day 01:55
   timezone: Asia/Tokyo
 - description: "calculate moving average 5, 20, 60, 100"
   url: /movingavg
-  schedule: every day 03:00
+  schedule: every day 02:00
   timezone: Asia/Tokyo
 - description: "calculate kahanshin"
   url: /calc
-  schedule: every day 04:00
+  schedule: every day 03:15
   timezone: Asia/Tokyo
