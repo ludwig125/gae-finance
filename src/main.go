@@ -620,7 +620,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		Error   error
 		PPPInfo pppInfo
 	}
-	calcPPPChan := func(done <-chan interface{}, code string) chan pppResult {
+	calcPPP := func(done <-chan interface{}, code string) chan pppResult {
 		pppResultChan := make(chan pppResult)
 		go func() {
 			defer close(pppResultChan)
@@ -674,13 +674,13 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 
 		doneCalcPPP := make(chan interface{})
 		defer close(doneCalcPPP)
-		p := calcPPPChan(doneCalcPPP, code)
+		p := calcPPP(doneCalcPPP, code)
 		pRes := <-p
 		if pRes.Error != nil {
-			log.Errorf(ctx, "failed to calcPPPChan. code: %s, err: %v", code, pRes.Error)
+			log.Errorf(ctx, "failed to calcPPP. code: %s, err: %v", code, pRes.Error)
 			continue
 		}
-		log.Infof(ctx, "succeeded to calcPPPChan. code: %s", code)
+		log.Infof(ctx, "succeeded to calcPPP. code: %s", code)
 		k, err := calcKahanshin(code, pRes.PPPInfo.Movings.Moving5)
 		if err != nil {
 			log.Errorf(ctx, "failed to calcKahanshinChan. code: %s, err: %v", code, err)
