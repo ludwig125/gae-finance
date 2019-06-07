@@ -150,23 +150,24 @@ func (p *pppInfo) Interface() []interface{} {
 	return toInterfaceSlice(p)
 }
 
-// 前日の終値と前々日の終値が５日移動平均を横切る場合のその増加率
-type kahanshinInfo struct {
+// 前日の終値と前々日の終値の増加率
+type increasingRateInfo struct {
 	BeforePreviousClose float64 // 直近のその一つ前の日の終値
 	PreviousClose       float64 // 直近の終値
 	IncreasingRate      float64 // 直近の終値のその一つ前の終値との増加率
 }
 
 // 要素を全てinterfaceにしたスライスを返すメソッド
-func (k *kahanshinInfo) Interface() []interface{} {
-	return toInterfaceSlice(k)
+func (i *increasingRateInfo) Interface() []interface{} {
+	return toInterfaceSlice(i)
 }
 
 type marketInfo struct {
-	Code          string // 銘柄
-	Date          string // 直近の日付
-	PPPInfo       pppInfo
-	KahanshinInfo kahanshinInfo
+	Code               string // 銘柄
+	Date               string // 直近の日付
+	PPPInfo            pppInfo
+	IncreasingRateInfo increasingRateInfo
+	KahanshinFlag      bool
 }
 
 // 要素を全てinterfaceにしたスライスを返すメソッド
@@ -608,97 +609,103 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	// }
 	log.Infof(ctx, "codes %v", codes)
 
-	// 移動平均線の並びからPPPの種類を判定
-	// calcPPP := func(code string) (pppInfo, error) {
-	// 	m, err := getMovings(r, db, code, previousBussinessDay)
-	// 	if err != nil {
-	// 		return pppInfo{}, err
-	// 	}
-	// 	return pppInfo{m.calcPPPKind(), m}, nil
-	// }
-
 	type pppResult struct {
 		Error   error
 		PPPInfo pppInfo
 	}
+	// 移動平均線の並びからPPPの種類を判定
 	calcPPP := func(done <-chan interface{}, code string) chan pppResult {
-		pppResultChan := make(chan pppResult)
+		ch := make(chan pppResult)
 		go func() {
-			defer close(pppResultChan)
+			defer close(ch)
 			m, err := getMovings(r, db, code, previousBussinessDay)
+			if err != nil {
+				err = fmt.Errorf("failed to getMovings. %v", err)
+			}
 			select {
 			case <-done:
 				return
-			case pppResultChan <- pppResult{Error: err, PPPInfo: pppInfo{m.calcPPPKind(), m}}:
+			case ch <- pppResult{Error: err, PPPInfo: pppInfo{m.calcPPPKind(), m}}:
 			}
 		}()
-		return pppResultChan
+		return ch
 	}
 
-	// 前日の終値と前々日の終値が５日移動平均を横切ったものについてその変動率を返す
-	calcKahanshin := func(code string, moving5 float64) (kahanshinInfo, error) {
-		// 前日と前々日の終値を取得
-		dcs, err := getOrderedDateCloses(r, db, code, previousBussinessDay, 2)
-		if err != nil {
-			return kahanshinInfo{}, fmt.Errorf("failed to getOrderedDateCloses. code: %s, err: %v", code, err)
-		}
-
-		// 陽線または陰線で横切る場合は増加率を返す
-		// 前日終値>５日移動平均>前々日終値 または 前々日終値>５日移動平均>前日終値
-		if isAGreaterThanOrEqualToB(dcs[0].Close, moving5, dcs[1].Close) || isAGreaterThanOrEqualToB(dcs[1].Close, moving5, dcs[0].Close) {
-			return kahanshinInfo{dcs[1].Close, dcs[0].Close, dcs[0].Close / dcs[1].Close}, nil
-		}
-		return kahanshinInfo{dcs[1].Close, dcs[0].Close, 0.0}, nil
+	type increasingRateResult struct {
+		Error              error
+		IncreasingRateInfo increasingRateInfo
+	}
+	// 前日の終値の前々日の終値に対する増加率を返す
+	calcIncreasingRate := func(done <-chan interface{}, code string) chan increasingRateResult {
+		ch := make(chan increasingRateResult)
+		go func() {
+			defer close(ch)
+			// 前日と前々日の終値を取得
+			closes, err := getOrderedDateCloses(r, db, code, previousBussinessDay, 2)
+			if err != nil {
+				err = fmt.Errorf("failed to getOrderedDateCloses. %v", err)
+			}
+			select {
+			case <-done:
+				return
+			case ch <- increasingRateResult{
+				Error:              err,
+				IncreasingRateInfo: increasingRateInfo{closes[1].Close, closes[0].Close, closes[0].Close / closes[1].Close}}:
+			}
+		}()
+		return ch
 	}
 
+	checkKahanshin := func(done chan interface{}, code string, inc *increasingRateInfo, m *float64) chan bool {
+		beforePreviousClose := inc.BeforePreviousClose
+		previousClose := inc.PreviousClose
+		moving5 := *m
+		ch := make(chan bool)
+		go func() {
+			defer close(ch)
+			select {
+			case <-done:
+				return
+			case ch <- isAGreaterThanOrEqualToB(previousClose, moving5, beforePreviousClose) || isAGreaterThanOrEqualToB(beforePreviousClose, moving5, previousClose):
+				// ５日移動平均を陽線または陰線で横切る場合はTrueを返す
+				// 前日終値>５日移動平均>前々日終値 または 前々日終値>５日移動平均>前日終値
+			}
+		}()
+		return ch
+	}
+
+	processStartTime2 := time.Now().UTC() // TODO: あとで消すか考える
 	mis := marketInfos{}
 	for _, code := range codes {
-		// p, err := calcPPP(code)
-		// if err != nil {
-		// 	log.Errorf(ctx, "failed to calcPPP. code: %s, err: %v", code, err)
-		// 	// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
-		// 	continue
-		// }
+		done := make(chan interface{})
+		defer close(done)
 
-		// log.Infof(ctx, "succeeded to calcPPP. code: %s", code)
+		p := calcPPP(done, code)
+		incr := calcIncreasingRate(done, code)
 
-		// k, err := calcKahanshin(code, p.Movings.Moving5)
-		// if err != nil {
-		// 	log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", code, err)
-		// 	// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
-		// 	continue
-		// }
-		// log.Debugf(ctx, "calcKahanshin %v. code: %s", k, code)
-
-		doneCalcPPP := make(chan interface{})
-		defer close(doneCalcPPP)
-		p := calcPPP(doneCalcPPP, code)
-		pRes := <-p
-		if pRes.Error != nil {
-			log.Errorf(ctx, "failed to calcPPP. code: %s, err: %v", code, pRes.Error)
+		pppRes := <-p
+		if pppRes.Error != nil {
+			log.Errorf(ctx, "failed to calcPPP. code: %s, err: %v", code, pppRes.Error)
 			continue
 		}
 		log.Infof(ctx, "succeeded to calcPPP. code: %s", code)
-		k, err := calcKahanshin(code, pRes.PPPInfo.Movings.Moving5)
-		if err != nil {
-			log.Errorf(ctx, "failed to calcKahanshin. code: %s, err: %v", code, err)
-			// os.Exit(0) // TODO: 一個でも取れないと失敗なのは嫌なのでContinueにした。あとで検討(retryとか)
+
+		incrRes := <-incr
+		if incrRes.Error != nil {
+			log.Errorf(ctx, "failed to calcIncreasingRate. code: %s, err: %v", code, incrRes.Error)
 			continue
 		}
-		log.Infof(ctx, "succeeded to calcKahanshin. code: %s", code)
-		// TODO: どうするかあとで考える
-		// 	if k.IncreasingRate == 0.0 {
-		// 		log.Debugf(ctx, "moving5 is not between closes. code: %s", code)
-		// 		continue
-		// 	}
+		log.Infof(ctx, "succeeded to calcIncreasingRate. code: %s", code)
 
-		//mi := marketInfo{Code: code, Date: previousBussinessDay, PPPInfo: p, KahanshinInfo: k}
-		mi := marketInfo{Code: code, Date: previousBussinessDay, PPPInfo: pRes.PPPInfo, KahanshinInfo: k}
+		ka := checkKahanshin(done, code, &incrRes.IncreasingRateInfo, &pppRes.PPPInfo.Movings.Moving5)
+
+		mi := marketInfo{Code: code, Date: previousBussinessDay, PPPInfo: pppRes.PPPInfo, IncreasingRateInfo: incrRes.IncreasingRateInfo, KahanshinFlag: <-ka}
 		mis = append(mis, mi)
 	}
+	log.Infof(ctx, "Elapsed time2  %v.", time.Since(processStartTime2))
 	// 「前日終値/前々日終値」の増加率が大きい順に並び替え
 	sort.SliceStable(mis, func(i, j int) bool {
-		return mis[i].KahanshinInfo.IncreasingRate > mis[j].KahanshinInfo.IncreasingRate
+		return mis[i].IncreasingRateInfo.IncreasingRate > mis[j].IncreasingRateInfo.IncreasingRate
 	})
 	// pppKindの定義順に並び替え
 	sort.SliceStable(mis, func(i, j int) bool {
