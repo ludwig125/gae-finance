@@ -79,7 +79,7 @@ func toInterfaceSlice(v interface{}) []interface{} {
 	for i := 0; i < rt.NumField(); i++ {
 		if rv.Field(i).Kind() == reflect.Struct {
 			// フィールドがstructの場合は再帰でinterfaceのSliceを取得して後ろにつなげる
-			sl := toInterfaceSlice(rv.Field(i).Interface())
+			sl := toInterfaceSlice(rv.Field(i).Interface()) // TODO: ここの引数がポインタじゃなくて値になってる。遅くならない？
 			vs = append(vs, sl...)
 		} else {
 			// フィールドがStringメソッドを持っていたらそれを使う
@@ -91,6 +91,30 @@ func toInterfaceSlice(v interface{}) []interface{} {
 			} else {
 				vs = append(vs, rv.Field(i).Interface())
 			}
+		}
+	}
+	return vs
+}
+
+// カラムのフィールド名を取得する関数
+// スプレッドシートの先頭行に項目名を出力させるため
+func getColumnName(v interface{}) []interface{} {
+	var vs []interface{}
+
+	rv := reflect.ValueOf(v)
+	// パラメータvが構造体のポインタのときはElemでポインタの指している先の値を取得する
+	if rv.Kind() == reflect.Ptr {
+		// vが構造体のポインタの時はここを通る
+		rv = reflect.ValueOf(v).Elem()
+	}
+	rt := rv.Type()
+	for i := 0; i < rt.NumField(); i++ {
+		if rv.Field(i).Kind() == reflect.Struct {
+			// フィールドがstructの場合は再帰でinterfaceのSliceを取得して後ろにつなげる
+			sl := getColumnName(rv.Field(i).Interface()) // TODO: ここの引数がポインタじゃなくて値になってる。遅くならない？
+			vs = append(vs, sl...)
+		} else {
+			vs = append(vs, rt.Field(i).Name)
 		}
 	}
 	return vs
@@ -167,7 +191,7 @@ type marketInfo struct {
 	Date               string // 直近の日付
 	PPPInfo            pppInfo
 	IncreasingRateInfo increasingRateInfo
-	KahanshinFlag      bool
+	KahanshinFlag      bool // 前日, 前々日の終値が５日移動平均を横切るか
 }
 
 // 要素を全てinterfaceにしたスライスを返すメソッド
@@ -175,10 +199,21 @@ func (m *marketInfo) Interface() []interface{} {
 	return toInterfaceSlice(m)
 }
 
+// 構造体の項目名を返すメソッド
+// スプレッドシートの一行目に項目名を出力させるため
+func (m *marketInfo) ColumnName() []interface{} {
+	return getColumnName(m)
+}
+
 type marketInfos []marketInfo
 
 func (ms *marketInfos) Interface() [][]interface{} {
 	var msi [][]interface{}
+
+	// スプレッドシートの先頭行に項目名を出力させる
+	first := marketInfo{}
+	msi = append(msi, first.ColumnName())
+
 	for _, m := range *ms {
 		msi = append(msi, m.Interface())
 	}
