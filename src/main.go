@@ -322,17 +322,20 @@ func dailyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Infof(ctx, "Succeeded to get sheet client")
 
+	/* // しょっちゅう動いていないことがあるので毎日動かしておく
 	jst, _ := time.LoadLocation("Asia/Tokyo")
 	now := time.Now().In(jst)
 	// 以下はデバッグ用
 	//now := time.Date(2019, 5, 18, 10, 11, 12, 0, time.Local)
 	// 休日データを取得
 	holidayMap := getHolidaysFromSheet(r, sheetService)
+
 	// 前の日が休みの日だったら取得すべきデータがないので起動しない
 	if !isPreviousBussinessday(r, now, holidayMap) {
 		log.Infof(ctx, "Previous day is not business day.")
 		return
 	}
+	*/
 
 	// spreadsheetから銘柄コードを取得
 	//codes := readCode(sheetService, r, "ichibu")
@@ -381,6 +384,7 @@ func dailyHandler(w http.ResponseWriter, r *http.Request) {
 			log.Errorf(ctx, "failed to insertDB. %v", err)
 			continue
 		}
+		log.Infof(ctx, "succeeded to write %d records.", inserted)
 		inserted += ins
 	}
 
@@ -419,6 +423,7 @@ func getEachCodesPrices(r *http.Request, codes [][]interface{}) ([][]string, err
 			oneDayCodePrices := append([]string{code}, oneDayPrices...)
 			codePrices = append(codePrices, oneDayCodePrices)
 		}
+		log.Infof(ctx, "done scraping code: %s", code)
 		time.Sleep(1 * time.Second) // 1秒待つ
 	}
 	if allErrors != "" {
