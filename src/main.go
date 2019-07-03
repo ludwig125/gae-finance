@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"fmt"
 	"net/http"
@@ -384,7 +385,7 @@ func dailyHandler(w http.ResponseWriter, r *http.Request) {
 			log.Errorf(ctx, "failed to insertDB. %v", err)
 			continue
 		}
-		log.Infof(ctx, "succeeded to write %d records.", inserted)
+		log.Infof(ctx, "succeeded to write %d records.", ins)
 		inserted += ins
 	}
 
@@ -1096,6 +1097,8 @@ func doScrape(r *http.Request, code string) (string, string, error) {
 
 func fetchWebpageDoc(r *http.Request, urlname string, code string) (*goquery.Document, error) {
 	ctx := appengine.NewContext(r)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	client := urlfetch.Client(ctx)
 
 	baseURL := ""
@@ -1109,7 +1112,9 @@ func fetchWebpageDoc(r *http.Request, urlname string, code string) (*goquery.Doc
 
 	// Request the HTML page.
 	url := baseURL + code
-	//res, err := http.Get(url)
+
+	defer log.Infof(ctx, "succeeded to fetch daily for code: %s", code)
+	log.Infof(ctx, "fetch daily for code: %s", code)
 	res, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to get resp. url: '%s', err: %v", url, err)
